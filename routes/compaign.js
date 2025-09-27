@@ -77,8 +77,8 @@ router.post('/', auth, async (req, res) => {
   try {
     const {
       name,
-      contactListId,
-      deviceId,
+      contactList,
+      device,
       messageContent,
       scheduledDate,
       priority,
@@ -86,13 +86,13 @@ router.post('/', auth, async (req, res) => {
     } = req.body;
 
     // Verify contact list belongs to user
-    if (contactListId) {
-      const contactList = await ContactList.findOne({
-        _id: contactListId,
+    if (contactList) {
+      const contactListData = await ContactList.findOne({
+        _id: contactList,
         user: req.user._id
       });
       
-      if (!contactList) {
+      if (!contactListData) {
         return res.status(400).json({
           code: 400,
           reason: 'Contact list not found or access denied'
@@ -102,8 +102,8 @@ router.post('/', auth, async (req, res) => {
 
     const campaign = new Campaign({
       name,
-      contactList: contactListId,
-      device: deviceId,
+      contactList: contactList,
+      device: device,
       messageContent,
       scheduledDate,
       priority,

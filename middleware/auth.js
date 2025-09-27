@@ -32,7 +32,7 @@ const auth = async (req, res, next) => {
         reason: 'Account deactivated.' 
       });
     }
-    console.log("req.params.device_id",req.params);
+    //console.log("req.params.device_id",req.params);
      // If device_id is provided in query, validate and attach device
      if (req.query.device_id) {
       const device = await deviceModel.findOne({ 
