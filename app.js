@@ -5,9 +5,8 @@ const cors = require('cors');
 require('dotenv').config();
 
 const authRoutes = require('./routes/auth');
-const statusRoutes = require('./routes/status');
-const commandRoutes = require('./routes/commands');
-const smsRoutes = require('./routes/sms');
+const statusRoutes = require('./routes/Ejoin/status');
+const ejoinSmsRoutes = require('./routes/Ejoin/Sms');
 const campaignRoutes = require('./routes/compaign');
 const contactRoutes = require('./routes/contacts');
 const deviceRoutes = require('./routes/devices');
@@ -53,10 +52,10 @@ app.get('/health', (req, res) => {
 // Authentication routes
 app.use('/api/auth', authRoutes);
 
-// Protected routes
-app.use('/goip_get_status', auth, statusRoutes);
-app.use('/goip_send_cmd', auth, commandRoutes);
-app.use('/api/sms', auth, smsRoutes);
+// EJOIN routes
+app.use('/api/ejoin/goip_get_status', auth, statusRoutes);
+app.use('/api/ejoin/sms', auth, ejoinSmsRoutes);
+// system routes
 app.use('/api/campaigns', auth, campaignRoutes);
 app.use('/api/contacts', auth, contactRoutes);
 app.use('/api/devices', auth, deviceRoutes);

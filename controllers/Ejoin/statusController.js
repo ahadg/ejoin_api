@@ -1,5 +1,5 @@
 // controllers/statusController.js
-const DeviceClient = require('../services/deviceClient');
+const DeviceClient = require('../../services/deviceClient');
 
 exports.getStatus = async (req, res) => {
   try {

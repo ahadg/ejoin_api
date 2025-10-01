@@ -56,6 +56,10 @@ const campaignSchema = new mongoose.Schema({
     type: Map,
     of: mongoose.Schema.Types.Mixed,
     default: {}
+  },
+  taskIds : {
+    type : Array,
+    default: []
   }
 }, {
   timestamps: true

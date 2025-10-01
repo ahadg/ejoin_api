@@ -1,4 +1,4 @@
-const DeviceClient = require('../services/deviceClient');
+const DeviceClient = require('../../services/deviceClient');
 
 exports.sendSms = async (req, res) => {
   try {
@@ -19,31 +19,10 @@ exports.sendSms = async (req, res) => {
         reason: 'Request body must be an array of tasks'
       });
     }
-    console.log("v1")
     // Validate each task
-    for (const task of body) {
-      if (!task.id) {
-        return res.status(400).json({
-          code: 400,
-          reason: 'Task ID is required for each task'
-        });
-      }
-      if (!task.recipients || !Array.isArray(task.recipients) || task.recipients.length === 0) {
-        return res.status(400).json({
-          code: 400,
-          reason: 'Recipients array is required for each task'
-        });
-      }
-      if (!task.sms) {
-        return res.status(400).json({
-          code: 400,
-          reason: 'SMS content is required for each task'
-        });
-      }
-    }
-    console.log("v2")
     const client = new DeviceClient(device);
     const result = await client.sendSms(body);
+    //console.log("sendSms_result",result);
     res.json(result);
   } catch (error) {
     console.error('SMS send error:', error);
@@ -64,7 +43,7 @@ exports.pauseSms = async (req, res) => {
       });
     }
 
-    const { ids } = req.body;
+    const ids = req.body;
     
     if (!ids || !Array.isArray(ids)) {
       return res.status(400).json({
@@ -95,7 +74,7 @@ exports.resumeSms = async (req, res) => {
       });
     }
 
-    const { ids } = req.body;
+    const ids = req.body;
     
     if (!ids || !Array.isArray(ids)) {
       return res.status(400).json({
@@ -126,7 +105,7 @@ exports.removeSms = async (req, res) => {
       });
     }
 
-    const { ids } = req.body;
+    const ids = req.body;
     
     if (!ids || !Array.isArray(ids)) {
       return res.status(400).json({
@@ -202,9 +181,11 @@ exports.getSms = async (req, res) => {
   }
 };
 
+
 exports.getSmsConfig = async (req, res) => {
   try {
     const device = req.device;
+    console.log("getSmsConfig_device",device)
     if (!device) {
       return res.status(400).json({
         code: 400,
@@ -213,7 +194,9 @@ exports.getSmsConfig = async (req, res) => {
     }
 
     const client = new DeviceClient(device);
+    console.log("v1")
     const result = await client.getSmsConfig();
+    console.log("getSmsConfig_result",result)
     res.json(result);
   } catch (error) {
     console.error('Get SMS config error:', error);
@@ -226,6 +209,7 @@ exports.getSmsConfig = async (req, res) => {
 
 exports.setSmsConfig = async (req, res) => {
   try {
+    console.log("device",device)
     const device = req.device;
     if (!device) {
       return res.status(400).json({
@@ -235,11 +219,13 @@ exports.setSmsConfig = async (req, res) => {
     }
 
     const config = req.body;
-    
-    if (!config) {
+    if (
+      !config ||
+      (!config.sms_status_url && !config.recv_sms_url)
+    ) {
       return res.status(400).json({
         code: 400,
-        reason: 'Configuration object is required'
+        reason: 'Invalid config payload'
       });
     }
 
