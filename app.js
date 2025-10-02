@@ -1,9 +1,12 @@
+// server.js
 const express = require('express');
 const mongoose = require('mongoose');
 const bodyParser = require('body-parser');
 const cors = require('cors');
+const http = require('http');
+const socketIo = require('socket.io');
 require('dotenv').config();
-
+const jwt = require('jsonwebtoken');
 const authRoutes = require('./routes/auth');
 const statusRoutes = require('./routes/Ejoin/status');
 const ejoinSmsRoutes = require('./routes/Ejoin/Sms');
@@ -15,6 +18,14 @@ const messageRoutes = require('./routes/messages');
 const smsRoutes = require('./routes/sms');
 
 const app = express();
+const server = http.createServer(app);
+const io = socketIo(server, {
+  cors: {
+    origin: "*",
+    methods: ["GET", "POST"]
+  }
+});
+
 const port = process.env.PORT || 3000;
 
 // Connect to MongoDB
@@ -24,6 +35,51 @@ mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/sms-platf
 })
 .then(() => console.log('Connected to MongoDB'))
 .catch(err => console.error('MongoDB connection error:', err));
+
+// Socket.IO authentication middleware
+io.use((socket, next) => {
+  const token = socket.handshake.auth.token;
+  console.log("Socket.IO token",token)
+  if (!token) {
+    console.log("Socket.IO not token found")
+    return next(new Error('Authentication error'));
+
+  }
+  
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    socket.userId = decoded.userId;
+    next();
+  } catch (error) {
+    console.log("Socket.IO decodedn error",error)
+    next(new Error('Authentication error'));
+  }
+});
+
+// Socket.IO connection handling
+io.on('connection', (socket) => {
+  console.log(`User ${socket.userId} connected`);
+
+  // Join user to their personal room
+  socket.join(`user:${socket.userId}`);
+
+  // Join campaign-specific rooms if needed
+  socket.on('join-campaign', (campaignId) => {
+    socket.join(`campaign:${campaignId}`);
+    console.log(`User ${socket.userId} joined campaign room: ${campaignId}`);
+  });
+
+  socket.on('leave-campaign', (campaignId) => {
+    socket.leave(`campaign:${campaignId}`);
+  });
+
+  socket.on('disconnect', () => {
+    console.log(`User ${socket.userId} disconnected`);
+  });
+});
+
+// Make io available to routes
+app.set('io', io);
 
 // CORS middleware
 app.use(cors({
@@ -57,11 +113,11 @@ app.use('/api/auth', authRoutes);
 app.use('/api/ejoin/goip_get_status', auth, statusRoutes);
 app.use('/api/ejoin/sms', auth, ejoinSmsRoutes);
 // system routes
-app.use('/api/sms', auth, smsRoutes);
-app.use('/api/campaigns', auth, campaignRoutes);
-app.use('/api/contacts', auth, contactRoutes);
-app.use('/api/devices', auth, deviceRoutes);
-app.use('/api/messages', auth, messageRoutes);
+app.use('/api/sms', smsRoutes);
+app.use('/api/campaigns', campaignRoutes);
+app.use('/api/contacts', contactRoutes);
+app.use('/api/devices', deviceRoutes);
+app.use('/api/messages', messageRoutes);
 
 // 404 handler
 app.use('*', (req, res) => {
@@ -80,8 +136,8 @@ app.use((error, req, res, next) => {
   });
 });
 
-app.listen(port, () => {
+server.listen(port, () => {
   console.log(`SMS Platform API server running on port ${port}`);
 });
 
-module.exports = app;
+module.exports = { app, server, io };

@@ -69,7 +69,7 @@ exports.syncSms = async (req, res) => {
 };
   
 
-// ================== Webhook ==================
+//  Webhook (recieve SMS)
 exports.webhookSMS = async (req, res) => {
   try {
     const messages = Array.isArray(req.body) ? req.body : [req.body];

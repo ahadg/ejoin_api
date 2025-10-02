@@ -22,7 +22,8 @@ exports.sendSms = async (req, res) => {
     // Validate each task
     const client = new DeviceClient(device);
     const result = await client.sendSms(body);
-    //console.log("sendSms_result",result);
+    console.log("sendSms_result",result);
+    // [ { id: 1086473958, code: 0, reason: 'OK' } ]
     res.json(result);
   } catch (error) {
     console.error('SMS send error:', error);

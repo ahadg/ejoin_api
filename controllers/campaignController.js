@@ -107,14 +107,14 @@ exports.createCampaign = async (req, res) => {
 exports.updateCampaign = async (req, res) => {
   try {
     const {
-      name, contactList, device, status, taskIds,
+      name, contactList, device, status, taskId,
       messageContent, scheduledDate, priority, taskSettings
     } = req.body;
 
     const campaign = await Campaign.findOneAndUpdate(
       { _id: req.params.id, user: req.user._id },
       {
-        name, contactList, device, status, taskIds,
+        name, contactList, device, status, taskId,
         messageContent, scheduledDate, priority, taskSettings,
         updatedAt: new Date()
       },
@@ -215,3 +215,135 @@ exports.updateCampaignStatus = async (req, res) => {
     res.status(500).json({ code: 500, reason: 'Error updating campaign status' });
   }
 };
+
+// Webhook handler for SMS status updates
+exports.smsStatusWebhook = async (req, res) => {
+  try {
+    const { type, statuses } = req.body;
+    const io = req.app.get('io'); // Get Socket.IO instance
+
+    console.log('Webhook received:', { type, statuses });
+
+    // Validate webhook type
+    if (type !== 'sms-sent-status') {
+      return res.status(400).json({
+        code: 400,
+        reason: 'Invalid webhook type'
+      });
+    }
+
+    if (!statuses || !Array.isArray(statuses)) {
+      return res.status(400).json({
+        code: 400,
+        reason: 'Invalid statuses format'
+      });
+    }
+
+    // Process each status update
+    const updatePromises = statuses.map(async (status) => {
+      const { tid, sent = 0, failed = 0, unsent = 0, sdr = [] } = status;
+
+      // Find campaign by task ID
+      const campaign = await Campaign.findOne({ taskId: tid }).populate('user');
+      if (!campaign) {
+        console.log(`Campaign not found for task ID: ${tid}`);
+        return null;
+      }
+
+      // Delivered = SDR count
+      const deliveredMessages = sdr.length;
+
+      // Total cost from SDR
+      const totalCost = sdr.reduce((sum, report) => sum + (report.cost || 0), 0);
+
+      // Completed = sent + failed + unsent
+      const completedMessages = sent + failed + unsent;
+
+      // Calculate progress
+      const progress = campaign.totalContacts > 0 ? 
+        Math.min(100, (completedMessages / campaign.totalContacts) * 100) : 0;
+
+      // Update campaign data
+      let updateData = {
+        $inc: {
+          sentMessages: sent,
+          deliveredMessages: deliveredMessages,
+          failedMessages: failed,
+          completedMessages: completedMessages,
+          cost: totalCost
+        },
+        $set: { 
+          updatedAt: new Date(),
+          progress: progress
+        }
+      };
+
+      // Mark as completed if all contacts processed
+      if (campaign.completedMessages + completedMessages >= campaign.totalContacts) {
+        updateData.$set.status = 'completed';
+        updateData.$set.completedAt = new Date();
+      }
+
+      const updatedCampaign = await Campaign.findOneAndUpdate(
+        { _id: campaign._id },
+        updateData,
+        { new: true }
+      ).populate('user');
+
+      console.log(`Updated campaign ${campaign.name}:`, {
+        taskId: tid,
+        sent,
+        delivered: deliveredMessages,
+        failed,
+        completed: completedMessages,
+        cost: totalCost,
+        status: updatedCampaign.status,
+        progress: progress
+      });
+
+      // Emit real-time update to the user
+      if (io && updatedCampaign.user) {
+        console.log("socketio emit updatedCampaign.user._id",updatedCampaign.user._id)
+        io.to(`user:${updatedCampaign.user._id}`).emit('campaign-update', {
+          campaignId: updatedCampaign._id,
+          updates: {
+            sentMessages: updatedCampaign.sentMessages,
+            deliveredMessages: updatedCampaign.deliveredMessages,
+            failedMessages: updatedCampaign.failedMessages,
+            progress: updatedCampaign.progress,
+            status: updatedCampaign.status,
+            cost: updatedCampaign.cost,
+            updatedAt: updatedCampaign.updatedAt
+          }
+        });
+
+        // Also emit to campaign-specific room
+        // io.to(`campaign:${updatedCampaign._id}`).emit('campaign-detail-update', {
+        //   campaign: updatedCampaign
+        // });
+      }
+
+      return updatedCampaign;
+    });
+
+    const results = await Promise.all(updatePromises);
+    const successfulUpdates = results.filter(r => r !== null);
+
+    res.json({
+      code: 200,
+      message: `Successfully processed ${successfulUpdates.length} status updates`,
+      data: {
+        processed: successfulUpdates.length,
+        failed: results.length - successfulUpdates.length
+      }
+    });
+
+  } catch (error) {
+    console.error('Webhook processing error:', error);
+    res.status(500).json({
+      code: 500,
+      reason: 'Error processing webhook'
+    });
+  }
+};
+
