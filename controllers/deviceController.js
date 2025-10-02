@@ -43,8 +43,8 @@ exports.createDevice = async (req, res) => {
       user: req.user._id
     });
 
-    //
-    
+    // Fire and forget sync
+    syncDeviceSms(device);
 
     await device.save();
     res.status(201).json({ code: 201, message: 'Device created successfully', data: { device } });

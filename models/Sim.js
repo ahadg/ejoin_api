@@ -10,6 +10,6 @@ const simSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 // Unique index for (device, port, slot)
-simSchema.index({ device: 1, port: 1, slot: 1 }, { unique: true });
+//simSchema.index({ device: 1, port: 1, slot: 1 }, { unique: true });
 
 module.exports = mongoose.model("Sim", simSchema);

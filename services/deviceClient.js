@@ -38,7 +38,7 @@ class DeviceClient {
       }
       console.log("config__",config)
       const response = await axios(config);
-      console.log("raw response", response.data);
+      //console.log("raw response", response.data);
       return response.data;
       //return [ { id: -1155656598, code: 0, reason: 'OK' } ]
     } catch (error) {
@@ -74,7 +74,7 @@ class DeviceClient {
   }
 
   async getSms(sms_id = 1, sms_num = 0, sms_del = 0) {
-    const data = { sms_id, sms_num, sms_del };
+    const data = { id : sms_id, num : sms_num, sms_del };
     return this.request('/get_received_smses', data, 'GET', true);
   }
 

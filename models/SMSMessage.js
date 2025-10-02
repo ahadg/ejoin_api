@@ -4,11 +4,12 @@ const mongoose = require("mongoose");
 const smsMessageSchema = new mongoose.Schema({
   sim: { type: mongoose.Schema.Types.ObjectId, ref: "Sim", required: true },
   timestamp: { type: Date, required: true },
-  sender: { type: String },
-  receiver: { type: String },
+  from: { type: String },
+  to: { type: String },
   isReport: { type: Boolean, default: false },
-  content: { type: String, required: true },      // decoded SMS
-  rawContent: { type: String },                   // Base64/raw
+  read: { type: Boolean, default: false },
+  sms: { type: String, default: "" },      // decoded SMS
+  rawSms: { type: String },                   // Base64/raw
 }, { timestamps: true });
 
 module.exports = mongoose.model("SMSMessage", smsMessageSchema);

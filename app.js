@@ -12,6 +12,7 @@ const contactRoutes = require('./routes/contacts');
 const deviceRoutes = require('./routes/devices');
 const { auth } = require('./middleware/auth');
 const messageRoutes = require('./routes/messages');
+const smsRoutes = require('./routes/sms');
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -56,6 +57,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/ejoin/goip_get_status', auth, statusRoutes);
 app.use('/api/ejoin/sms', auth, ejoinSmsRoutes);
 // system routes
+app.use('/api/sms', auth, smsRoutes);
 app.use('/api/campaigns', auth, campaignRoutes);
 app.use('/api/contacts', auth, contactRoutes);
 app.use('/api/devices', auth, deviceRoutes);
