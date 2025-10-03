@@ -1,9 +1,11 @@
 // controllers/statusController.js
+const Device = require('../../models/Device');
+const Sim = require('../../models/Sim');
 const DeviceClient = require('../../services/deviceClient');
 
 exports.getStatus = async (req, res) => {
   try {
-    console.log("getStatus called",req.device);
+    console.log("getStatus called", req.device);
     const { ipAddress, port, period, all_sims, all_slots, username, password } = req.device;
     
     if (!ipAddress) {
@@ -17,10 +19,14 @@ exports.getStatus = async (req, res) => {
   
     // Get current status with additional parameters
     const params = {username, password};
-    if (all_sims) params.all_sims = parseInt(all_sims);
-    if (all_slots) params.all_slots = parseInt(all_slots);
     
     const data = await client.getStatus(params);
+    console.log("getStatus_data", data);
+    
+    // Process device and SIM data in database
+    if(data) {
+      processDeviceStatus(data,req.device);
+    }
     res.json(data);
   } catch (error) {
     console.error('Status error:', error);
@@ -60,34 +66,43 @@ exports.statusNotification = async (req, res) => {
 };
 
 // Helper functions to process status notifications
-async function processDeviceStatus(statusData) {
+async function processDeviceStatus(statusData,the_device) {
   try {
     // Extract device information
-    const { mac, ip, 'max-ports': maxPorts, 'max-slots': maxSlots, status } = statusData;
+    const { mac, ip, ver, 'max-ports': maxPorts, 'max-slot': maxSlots, status } = statusData;
     
     console.log(`Processing device status for MAC: ${mac}, IP: ${ip}`);
     
     // Update device status in database
-    // This would typically update the device record with the new status information
     const activeSlots = status.filter(port => port.inserted === 1 && port.slot_active === 1).length;
     
     // Find device by IP or MAC and update its status
-    const { data: device, error } = await supabase
-      .from('devices')
-      .update({
+    const device = await Device.findOneAndUpdate(
+      { $or: [{ _id: the_device?._id }, { password: the_device?.password }] },
+      {
+        macAddress: mac,
+        //ipAddress: ip,
+        firmwareVersion: ver,
+        maxPorts: maxPorts,
+        maxSlots: maxSlots,
         status: 'online',
-        active_slots: activeSlots,
-        last_seen: new Date().toISOString(),
-        updated_at: new Date().toISOString()
-      })
-      .or(`ip_address.eq.${ip},mac.eq.${mac}`)
-      .select()
-      .single();
+        activeSlots: activeSlots,
+        lastSeen: new Date(),
+        updatedAt: new Date()
+      },
+      { 
+        upsert: true, 
+        new: true,
+        setDefaultsOnInsert: true 
+      }
+    );
     
-    if (error) {
-      console.error('Error updating device status:', error);
+    if (!device) {
+      console.error('Error updating device status: Device not found');
       return;
     }
+    
+    console.log(`Device status updated successfully for ${mac}`);
     
     // Process each port status
     for (const portStatus of status) {
@@ -95,11 +110,11 @@ async function processDeviceStatus(statusData) {
         ...portStatus,
         type: 'port-status',
         mac: statusData.mac,
-        ip: statusData.ip
+        ip: statusData.ip,
+        deviceId: device._id
       });
     }
     
-    console.log(`Device status updated successfully for ${mac}`);
   } catch (error) {
     console.error('Error processing device status:', error);
   }
@@ -107,52 +122,90 @@ async function processDeviceStatus(statusData) {
 
 async function processPortStatus(portData) {
   try {
-    const { port: portId, status: statusCode, bal, opr, sn, imei, imsi, iccid, 
-            inserted, slot_active, sig, led, mac, ip } = portData;
+    const { 
+      port: portId, 
+      st: statusCode, 
+      bal, 
+      opr, 
+      sn, 
+      imei, 
+      imsi, 
+      iccid, 
+      inserted, 
+      slot_active, 
+      sig, 
+      led, 
+      network,
+      mac, 
+      ip,
+      deviceId 
+    } = portData;
     
-    console.log(`Processing port status for port ${portId}, status: ${statusCode}`);
+    //console.log(`Processing port status for port ${portId}, status: ${statusCode}`);
     
-    // Parse port and slot from portId (format like "1A", "2B", etc.)
-    const portNumber = parseInt(portId.match(/\d+/)[0]);
-    const slotLetter = portId.match(/[A-Z]/)[0];
-    const slotNumber = slotLetter.charCodeAt(0) - 64; // Convert A=1, B=2, etc.
+    // Parse port and slot from portId (format like "1.01", "2.01", etc.)
+    const [portNumber, slotNumber] = portId.split('.').map(Number);
+    
+    // Get device ID if not provided
+    let deviceObjectId = deviceId;
+    if (!deviceObjectId) {
+      const device = await Device.findOne({ $or: [{ ipAddress: ip }, { macAddress: mac }] });
+      if (!device) {
+        console.error(`Device not found for IP: ${ip}, MAC: ${mac}`);
+        return;
+      }
+      deviceObjectId = device._id;
+    }
     
     // Get SIM status from status code
     const simStatus = getSIMStatus(statusCode);
     
-    // Update or create SIM card record in database
-    const { data: simCard, error } = await supabase
-      .from('sim_cards')
-      .upsert({
-        device_mac: mac,
-        device_ip: ip,
+    // Only create/update SIM record if SIM is inserted and active
+    if (inserted === 1 && slot_active === 1) {
+      // Update or create SIM card record in database
+      const simData = {
+        device: deviceObjectId,
+        portNumber: portId,
         port: portNumber,
         slot: slotNumber,
         status: simStatus,
-        status_code: statusCode,
-        balance: bal,
-        operator: opr,
-        phone_number: sn,
+        statusCode: statusCode,
         imei: imei,
-        imsi: imsi,
-        iccid: iccid,
         inserted: inserted === 1,
-        slot_active: slot_active === 1,
-        signal_strength: sig,
-        led_enabled: led === 1,
-        last_updated: new Date().toISOString()
-      }, {
-        onConflict: 'device_mac,port,slot'
-      })
-      .select()
-      .single();
-    
-    if (error) {
-      console.error('Error updating SIM card status:', error);
-      return;
+        slotActive: slot_active === 1,
+        ledEnabled: led === 1,
+        networkType: network,
+        lastUpdated: new Date()
+      };
+      
+      // Only add these fields if they exist (for active SIMs)
+      if (imsi) simData.imsi = imsi;
+      if (iccid) simData.iccid = iccid;
+      if (sn) simData.phoneNumber = sn;
+      if (opr) simData.operator = opr;
+      if (bal) simData.balance = bal;
+      if (sig) simData.signalStrength = sig;
+      
+      const simCard = await Sim.findOneAndUpdate(
+        { device: deviceObjectId, port : portNumber, slot :slotNumber  },
+        simData,
+        { 
+          upsert: true, 
+          new: true,
+          setDefaultsOnInsert: true 
+        }
+      );
+      
+      console.log(`Port ${portId} status updated successfully`);
+    } else {
+      // SIM is not inserted or not active, remove it if it exists
+      // await Sim.deleteOne({ 
+      //   device: deviceObjectId, 
+      //   port: portId 
+      // });
+      console.log(`Port ${portId} - SIM not inserted or inactive, removed from database`);
     }
     
-    console.log(`Port ${portId} status updated successfully`);
   } catch (error) {
     console.error('Error processing port status:', error);
   }
@@ -160,11 +213,9 @@ async function processPortStatus(portData) {
 
 // Helper function to determine SIM status from status code
 function getSIMStatus(statusCode) {
-  if (typeof statusCode === 'string') {
-    const code = parseInt(statusCode.split(' ')[0]);
-    
-    if (code === 3 || code === 4 || code === 15) return "active";
-    if (code === 0 || code === 1 || code === 11) return "inactive";
+  if (typeof statusCode === 'number') {
+    if (statusCode === 3 || statusCode === 4 || statusCode === 15) return "active";
+    if (statusCode === 0 || statusCode === 1 || statusCode === 11) return "inactive";
     return "error";
   }
   return "unknown";

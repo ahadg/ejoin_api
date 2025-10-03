@@ -1,3 +1,4 @@
+// models/Device.js
 const mongoose = require('mongoose');
 
 const deviceSchema = new mongoose.Schema({
@@ -11,6 +12,10 @@ const deviceSchema = new mongoose.Schema({
     required: true
   },
   ipAddress: {
+    type: String,
+    required: true
+  },
+  macAddress: {
     type: String,
     required: true
   },
@@ -51,6 +56,9 @@ const deviceSchema = new mongoose.Schema({
     type: Date,
     default: Date.now
   },
+  firmwareVersion: String,
+  maxPorts: Number,
+  maxSlots: Number,
   password: String,
   port: String,
   username: String

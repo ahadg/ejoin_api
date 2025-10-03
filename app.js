@@ -16,7 +16,8 @@ const deviceRoutes = require('./routes/devices');
 const { auth } = require('./middleware/auth');
 const messageRoutes = require('./routes/messages');
 const smsRoutes = require('./routes/sms');
-
+const commandsRoutes = require('./routes/Ejoin/commands');
+const simRoutes = require('./routes/sim');
 const app = express();
 const server = http.createServer(app);
 const io = socketIo(server, {
@@ -101,6 +102,8 @@ app.use('/api/auth', authRoutes);
 // EJOIN routes
 app.use('/api/ejoin/goip_get_status', auth, statusRoutes);
 app.use('/api/ejoin/sms', auth, ejoinSmsRoutes);
+app.use('/api/ejoin/commands', auth, commandsRoutes);
+app.use('/api/sims', auth, simRoutes);
 // system routes
 app.use('/api/sms', smsRoutes);
 app.use('/api/campaigns', campaignRoutes);

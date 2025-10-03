@@ -86,10 +86,13 @@ class DeviceClient {
   async setSmsConfig(config) {
     return this.request('/set_sms_config', config, 'POST');
   }
+  async sendUSSD(body) {
+    return this.request('/send_ussds', body, 'POST');
+  }
 
   // Existing methods for device status and commands
   async getStatus(params = {}) {
-    return this.request('/goip_get_status.html', params, 'GET');
+    return this.request('/get_device_status', params, 'GET');
   }
 
   async sendCommand(op, ports, additionalParams = {}) {
