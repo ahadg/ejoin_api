@@ -33,6 +33,10 @@ const contactSchema = new mongoose.Schema({
     type: Boolean,
     default: true
   },
+  isReport: {
+    type: Boolean,
+    default: false
+  },
   status: {
     type: String,
     enum: ['active', 'inactive', 'bounced'],

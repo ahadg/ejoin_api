@@ -2,6 +2,7 @@ const Device = require("../models/Device");
 const Sim = require("../models/Sim");
 const SMSMessage = require("../models/SMSMessage");
 const { syncDeviceSms } = require("../utils/helpers");
+const Contact = require("../models/Contact");
 
 // ================== Get SMS ==================
 exports.getSMS = async (req, res) => {
@@ -69,42 +70,83 @@ exports.syncSms = async (req, res) => {
 };
   
 
-//  Webhook (recieve SMS)
+// Webhook (receive SMS / delivery report)
 exports.webhookSMS = async (req, res) => {
   try {
-    const messages = Array.isArray(req.body) ? req.body : [req.body];
+    const { type, mac, smses } = req.body;
+    const io = req.app.get("io"); // Socket.IO instance
 
-    for (const msg of messages) {
-      const { port, slot, timestamp, from, to, is_report, sms } = msg;
+    if (type !== "received-sms" || !Array.isArray(smses)) {
+      return res.status(400).json({ code: 400, reason: "Invalid SMS webhook payload" });
+    }
 
-      // TODO: identify device (via auth, token, IP, or headers)
-      const device = await Device.findOne(); // placeholder
+    for (const msg of smses) {
+      const {
+        is_report,
+        port,
+        slot,
+        ts,
+        from,
+        to,
+        iccid,
+        imsi,
+        imei,
+        sms
+      } = msg;
 
+      // 🔹 Identify Device by MAC
+      let device = await Device.findOne({ mac });
       if (!device) {
-        console.warn("Device not found for webhook message");
+        console.warn(`Device not found for MAC: ${mac}`);
         continue;
       }
 
-      // Find or create SIM
+      // 🔹 Find or create SIM
       let sim = await Sim.findOne({ device: device._id, port, slot });
       if (!sim) {
-        sim = await Sim.create({ device: device._id, port, slot });
+        sim = await Sim.create({ device: device._id, port, slot, iccid, imsi, imei });
       }
 
-      // Decode Base64
-      const decodedSMS = Buffer.from(sms, "base64").toString("utf-8");
+      // 🔹 Decode SMS (reports may not have sms)
+      let decodedSMS = null;
+      if (sms) {
+        try {
+          decodedSMS = Buffer.from(sms, "base64").toString("utf-8");
+        } catch (e) {
+          decodedSMS = sms;
+        }
+      }
 
-      // Save message
-      await SMSMessage.create({
+      // 🔹 Save message
+      let savedMessage = await SMSMessage.create({
         sim: sim._id,
-        timestamp: new Date(timestamp * 1000), // epoch → Date
-        from: from,
-        to: to,
-        read : false,
+        timestamp: new Date(ts * 1000),
+        from,
+        to,
+        read: false,
         isReport: is_report,
         sms: decodedSMS,
-        rawSms: sms,
+        rawSms: sms || null,
       });
+
+      // 🔹 Populate sim + device for output
+      savedMessage = await savedMessage.populate({
+        path: "sim",
+        populate: { path: "device" }
+      });
+
+      // 🔹 If report → update Contact
+      if (is_report && from) {
+        await Contact.findOneAndUpdate(
+          { phoneNumber: from },
+          { $set: { isReport: true, optedIn: false } }
+        );
+      }
+
+      // 🔹 Emit populated message
+      if (io) {
+        io.to(`device:${device._id}`).emit("sms-received", savedMessage);
+      }
     }
 
     res.status(201).json({ code: 201, success: true });
@@ -113,3 +155,4 @@ exports.webhookSMS = async (req, res) => {
     res.status(500).json({ code: 500, reason: "Failed to save SMS" });
   }
 };
+

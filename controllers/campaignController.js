@@ -1,5 +1,6 @@
 const Campaign = require('../models/Campaign');
 const ContactList = require('../models/ContactList');
+const CampaignStats = require("../models/campaignStats");
 
 // Get all campaigns for user
 exports.getCampaigns = async (req, res) => {
@@ -220,67 +221,50 @@ exports.updateCampaignStatus = async (req, res) => {
 exports.smsStatusWebhook = async (req, res) => {
   try {
     const { type, statuses } = req.body;
-    const io = req.app.get('io'); // Get Socket.IO instance
+    const io = req.app.get("io"); // Socket.IO instance
 
-    console.log('Webhook received:', { type, statuses });
-
-    // Validate webhook type
-    if (type !== 'sms-sent-status') {
-      return res.status(400).json({
-        code: 400,
-        reason: 'Invalid webhook type'
-      });
+    if (type !== "sms-sent-status") {
+      return res.status(400).json({ code: 400, reason: "Invalid webhook type" });
     }
 
     if (!statuses || !Array.isArray(statuses)) {
-      return res.status(400).json({
-        code: 400,
-        reason: 'Invalid statuses format'
-      });
+      return res.status(400).json({ code: 400, reason: "Invalid statuses format" });
     }
 
-    // Process each status update
+    // Normalize "today" to midnight UTC
+    const today = new Date();
+    today.setUTCHours(0, 0, 0, 0);
+
     const updatePromises = statuses.map(async (status) => {
       const { tid, sent = 0, failed = 0, unsent = 0, sdr = [] } = status;
 
-      // Find campaign by task ID
-      const campaign = await Campaign.findOne({ taskId: tid }).populate('user');
-      if (!campaign) {
-        console.log(`Campaign not found for task ID: ${tid}`);
-        return null;
-      }
+      // Find campaign by taskId
+      const campaign = await Campaign.findOne({ taskId: tid }).populate("user");
+      if (!campaign) return null;
 
-      // Delivered = SDR count
       const deliveredMessages = sdr.length;
-
-      // Total cost from SDR
       const totalCost = sdr.reduce((sum, report) => sum + (report.cost || 0), 0);
-
-      // Completed = sent + failed + unsent
       const completedMessages = sent + failed + unsent;
 
-      // Calculate progress
-      const progress = campaign.totalContacts > 0 ? 
-        Math.min(100, (completedMessages / campaign.totalContacts) * 100) : 0;
+      const progress =
+        campaign.totalContacts > 0
+          ? Math.min(100, (completedMessages / campaign.totalContacts) * 100)
+          : 0;
 
-      // Update campaign data
+      // -------- Update Campaign totals --------
       let updateData = {
         $inc: {
           sentMessages: sent,
           deliveredMessages: deliveredMessages,
           failedMessages: failed,
           completedMessages: completedMessages,
-          cost: totalCost
+          cost: totalCost,
         },
-        $set: { 
-          updatedAt: new Date(),
-          progress: progress
-        }
+        $set: { updatedAt: new Date(), progress },
       };
 
-      // Mark as completed if all contacts processed
       if (campaign.completedMessages + completedMessages >= campaign.totalContacts) {
-        updateData.$set.status = 'completed';
+        updateData.$set.status = "completed";
         updateData.$set.completedAt = new Date();
       }
 
@@ -288,23 +272,25 @@ exports.smsStatusWebhook = async (req, res) => {
         { _id: campaign._id },
         updateData,
         { new: true }
-      ).populate('user');
+      ).populate("user");
 
-      console.log(`Updated campaign ${campaign.name}:`, {
-        taskId: tid,
-        sent,
-        delivered: deliveredMessages,
-        failed,
-        completed: completedMessages,
-        cost: totalCost,
-        status: updatedCampaign.status,
-        progress: progress
-      });
+      // -------- Update or create CampaignStats --------
+      await CampaignStats.findOneAndUpdate(
+        { campaign: campaign._id, user: campaign.user._id, date: today },
+        {
+          $inc: {
+            sentMessages: sent,
+            deliveredMessages,
+            failedMessages: failed,
+            cost: totalCost,
+          },
+        },
+        { upsert: true, new: true }
+      );
 
-      // Emit real-time update to the user
+      // -------- Real-time updates --------
       if (io && updatedCampaign.user) {
-        console.log("socketio emit updatedCampaign.user._id",updatedCampaign.user._id)
-        io.to(`user:${updatedCampaign.user._id}`).emit('campaign-update', {
+        io.to(`user:${updatedCampaign.user._id}`).emit("campaign-update", {
           campaignId: updatedCampaign._id,
           updates: {
             sentMessages: updatedCampaign.sentMessages,
@@ -313,37 +299,25 @@ exports.smsStatusWebhook = async (req, res) => {
             progress: updatedCampaign.progress,
             status: updatedCampaign.status,
             cost: updatedCampaign.cost,
-            updatedAt: updatedCampaign.updatedAt
-          }
+            updatedAt: updatedCampaign.updatedAt,
+          },
         });
-
-        // Also emit to campaign-specific room
-        // io.to(`campaign:${updatedCampaign._id}`).emit('campaign-detail-update', {
-        //   campaign: updatedCampaign
-        // });
       }
 
       return updatedCampaign;
     });
 
     const results = await Promise.all(updatePromises);
-    const successfulUpdates = results.filter(r => r !== null);
+    const successful = results.filter(Boolean).length;
 
     res.json({
       code: 200,
-      message: `Successfully processed ${successfulUpdates.length} status updates`,
-      data: {
-        processed: successfulUpdates.length,
-        failed: results.length - successfulUpdates.length
-      }
+      message: `Processed ${successful} status updates`,
+      data: { processed: successful, failed: results.length - successful },
     });
-
-  } catch (error) {
-    console.error('Webhook processing error:', error);
-    res.status(500).json({
-      code: 500,
-      reason: 'Error processing webhook'
-    });
+  } catch (err) {
+    console.error("Webhook error:", err);
+    res.status(500).json({ code: 500, reason: "Error processing webhook" });
   }
 };
 

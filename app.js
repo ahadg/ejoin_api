@@ -45,7 +45,6 @@ io.use((socket, next) => {
     return next(new Error('Authentication error'));
 
   }
-  
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     socket.userId = decoded.userId;
@@ -62,16 +61,6 @@ io.on('connection', (socket) => {
 
   // Join user to their personal room
   socket.join(`user:${socket.userId}`);
-
-  // Join campaign-specific rooms if needed
-  socket.on('join-campaign', (campaignId) => {
-    socket.join(`campaign:${campaignId}`);
-    console.log(`User ${socket.userId} joined campaign room: ${campaignId}`);
-  });
-
-  socket.on('leave-campaign', (campaignId) => {
-    socket.leave(`campaign:${campaignId}`);
-  });
 
   socket.on('disconnect', () => {
     console.log(`User ${socket.userId} disconnected`);
