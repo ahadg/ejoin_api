@@ -1,5 +1,5 @@
 const Sim = require("../models/Sim");
-const SMSMessage = require("../models/SMSMessage");
+const SimMessages = require("../models/SimMessages");
 const DeviceClient = require("../services/deviceClient");
 
 // Helper function: sync SMS from device into DB
@@ -32,14 +32,14 @@ exports.syncDeviceSms = async (device) => {
     }
 
     // avoid duplicates
-    const exists = await SMSMessage.findOne({
+    const exists = await SimMessages.findOne({
       sim: sim._id,
       timestamp: new Date(timestamp * 1000),
       from: from,
     });
 
     if (!exists) {
-      await SMSMessage.create({
+      await SimMessages.create({
         sim: sim._id,
         timestamp: new Date(timestamp * 1000),
         from: from,
