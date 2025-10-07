@@ -211,7 +211,7 @@ exports.getSmsConfig = async (req, res) => {
 
 exports.setSmsConfig = async (req, res) => {
   try {
-    console.log("device",device)
+    //console.log("device",device)
     const device = req.device;
     if (!device) {
       return res.status(400).json({

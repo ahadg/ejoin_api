@@ -60,7 +60,7 @@ exports.createCampaign = async (req, res) => {
   try {
     const {
       name, contactList, device, messageContent,
-      scheduledDate, priority, taskSettings, totalContacts
+      scheduledDate, priority, taskSettings, totalContacts, status
     } = req.body;
 
     // Verify contact list belongs to user
@@ -86,7 +86,8 @@ exports.createCampaign = async (req, res) => {
       priority,
       taskSettings,
       user: req.user._id,
-      totalContacts
+      totalContacts,
+      status
     });
 
     await campaign.save();
