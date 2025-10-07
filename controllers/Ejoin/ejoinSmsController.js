@@ -117,6 +117,7 @@ exports.removeSms = async (req, res) => {
     
     const client = new DeviceClient(device);
     const result = await client.removeSms(ids);
+    console.log("removeSms_result",result);
     res.json(result);
   } catch (error) {
     console.error('SMS remove error:', error);

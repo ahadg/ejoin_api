@@ -9,7 +9,7 @@ const contactSchema = new mongoose.Schema({
   contactList: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'ContactList',
-    required: true
+    //required: true
   },
   phoneNumber: {
     type: String,

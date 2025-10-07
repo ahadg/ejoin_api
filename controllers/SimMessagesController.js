@@ -1,8 +1,11 @@
 const Device = require("../models/Device");
 const Sim = require("../models/Sim");
 const SimMessages = require("../models/SimMessages");
-const { syncDeviceSms } = require("../utils/helpers");
+const { syncDeviceSms, findOrCreateContact } = require("../utils/helpers");
 const Contact = require("../models/Contact");
+const ContactList = require("../models/ContactList");
+
+
 
 // ================== Get SMS ==================
 exports.getSMS = async (req, res) => {
@@ -20,6 +23,7 @@ exports.getSMS = async (req, res) => {
 
     const messages = await SimMessages.find(query)
       .populate("sim")
+      .populate("contact")
       .sort({ timestamp: -1 })
       .limit(Number(limit));
 
@@ -33,7 +37,7 @@ exports.getSMS = async (req, res) => {
   }
 };
 
-// Add to your SMS controller
+// ================== Get Conversations ==================
 exports.getConversations = async (req, res) => {
   try {
     const { deviceId } = req.query;
@@ -70,7 +74,8 @@ exports.getConversations = async (req, res) => {
               $cond: [{ $eq: ["$read", false] }, 1, 0]
             }
           },
-          messageCount: { $sum: 1 }
+          messageCount: { $sum: 1 },
+          contactId: { $first: "$contact" }
         }
       },
       {
@@ -85,6 +90,20 @@ exports.getConversations = async (req, res) => {
         $unwind: "$simInfo"
       },
       {
+        $lookup: {
+          from: "contacts",
+          localField: "contactId",
+          foreignField: "_id",
+          as: "contactInfo"
+        }
+      },
+      {
+        $unwind: {
+          path: "$contactInfo",
+          preserveNullAndEmptyArrays: true
+        }
+      },
+      {
         $project: {
           phoneNumber: "$_id.phoneNumber",
           port: "$simInfo.port",
@@ -93,7 +112,8 @@ exports.getConversations = async (req, res) => {
           lastTimestamp: 1,
           unreadCount: 1,
           messageCount: 1,
-          simId: "$simInfo._id"
+          simId: "$simInfo._id",
+          contact: "$contactInfo"
         }
       },
       {
@@ -111,6 +131,7 @@ exports.getConversations = async (req, res) => {
   }
 };
 
+// ================== Get Conversation Messages ==================
 exports.getConversationMessages = async (req, res) => {
   try {
     const { phoneNumber, port, slot, deviceId } = req.query;
@@ -139,10 +160,8 @@ exports.getConversationMessages = async (req, res) => {
       from: phoneNumber
     })
     .sort({ timestamp: 1 })
-    .populate({
-      path: "sim",
-      populate: { path: "device" }
-    });
+    .populate("sim")
+    .populate("contact");
 
     // Mark all messages as read
     await SimMessages.updateMany(
@@ -164,10 +183,10 @@ exports.getConversationMessages = async (req, res) => {
   }
 };
 
-// Add to your SMS controller
+// ================== Send SMS ==================
 exports.sendSMS = async (req, res) => {
   try {
-    const { deviceId, port, slot, to, sms } = req.body;
+    const { deviceId, port, slot, to, sms, userId } = req.body;
 
     if (!deviceId || !port || !slot || !to || !sms) {
       return res.status(400).json({ 
@@ -193,46 +212,29 @@ exports.sendSMS = async (req, res) => {
       return res.status(404).json({ code: 404, reason: "SIM not found for specified port and slot" });
     }
 
-    // Send SMS via device API
-    const response = await fetch(`http://${device.ip}:${device.port}/api/sms/send`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        port: parseInt(port),
-        slot: parseInt(slot),
-        to: to,
-        sms: Buffer.from(sms).toString('base64')
-      })
-    });
+    // Find or create contact for recipient
+    const contact = await findOrCreateContact(to, userId || (device.user ? device.user.toString() : null));
 
-    if (!response.ok) {
-      throw new Error(`Device responded with status: ${response.status}`);
-    }
-
-    const result = await response.json();
-
-    // Save the outgoing message to database
+    // Save the outgoing message to database with contact reference
     const message = await SimMessages.create({
       sim: sim._id,
+      contact: contact ? contact._id : undefined,
       timestamp: new Date(),
-      from: sim.phoneNumber || 'Unknown',
+      //from: sim.to || 'Unknown',
+      from: to,
       to: to,
       sms: sms,
       rawSms: Buffer.from(sms).toString('base64'),
       isReport: false,
       read: true,
       direction: 'outbound',
-      status: 'sent'
+      status: 'sent' // Set initial status as 'sent'
     });
 
     // Populate for response
     const populatedMessage = await SimMessages.findById(message._id)
-      .populate({
-        path: "sim",
-        populate: { path: "device" }
-      });
+      .populate("sim")
+      .populate("contact");
 
     res.status(201).json({ 
       code: 201, 
@@ -244,7 +246,7 @@ exports.sendSMS = async (req, res) => {
     console.error("Send SMS Error:", err);
     res.status(500).json({ 
       code: 500, 
-      reason: "Failed to send SMS: " + err.message 
+      reason: "Failed to save SMS to database: " + err.message 
     });
   }
 };
@@ -252,7 +254,7 @@ exports.sendSMS = async (req, res) => {
 // ================== Create SMS ==================
 exports.createSms = async (req, res) => {
   try {
-    const { simId, from, to, sms, isReport = false, rawSms } = req.body;
+    const { simId, from, to, sms, isReport = false, rawSms, userId } = req.body;
 
     if (!simId || !sms) {
       return res.status(400).json({ code: 400, reason: "simId and sms are required" });
@@ -263,22 +265,28 @@ exports.createSms = async (req, res) => {
       return res.status(404).json({ code: 404, reason: "SIM not found" });
     }
 
+    // Determine contact phone number and find/create contact
+    const contactPhoneNumber = from || to;
+    let contact = null;
+    if (contactPhoneNumber) {
+      contact = await findOrCreateContact(contactPhoneNumber, userId);
+    }
+
     let message = await SimMessages.create({
       sim: sim._id,
+      contact: contact ? contact._id : undefined,
       timestamp: new Date(),
       from,
       to,
       sms,
       rawSms,
       isReport,
-      read: false
+      read: false,
+      direction: from ? 'inbound' : 'outbound'
     });
 
     // Populate sim + device for output
-    message = await message.populate({
-      path: "sim",
-      populate: { path: "device" }
-    });
+    message = await message.populate("sim").populate("contact");
 
     res.status(201).json({ code: 201, success: true, data: { message } });
   } catch (err) {
@@ -287,45 +295,45 @@ exports.createSms = async (req, res) => {
   }
 };
 
-
-
+// ================== Mark as Read ==================
 exports.markAsRead = async (req, res) => {
-    try {
-      const { messageId } = req.params;
-  
-      const message = await SimMessages.findByIdAndUpdate(
-        messageId,
-        { read: true },
-        { new: true }
-      );
-  
-      if (!message) {
-        return res.status(404).json({ code: 404, reason: "Message not found" });
-      }
-  
-      res.json({ code: 200, success: true, data: { message } });
-    } catch (err) {
-      console.error("MarkAsRead Error:", err);
-      res.status(500).json({ code: 500, reason: "Failed to mark message as read" });
-    }
-  };
-  
+  try {
+    const { messageId } = req.params;
 
-exports.syncSms = async (req, res) => {
-    try {
-        const device = await Device.findById(req.params.deviceId);
-        if (!device) return res.status(404).json({ error: "Device not found" });
+    const message = await SimMessages.findByIdAndUpdate(
+      messageId,
+      { read: true },
+      { new: true }
+    )
+    .populate("sim")
+    .populate("contact");
 
-        await syncDeviceSms(device);
-        res.json({ success: true });
-    } catch (err) {
-        console.error("Sync Error:", err);
-        res.status(500).json({ error: "Failed to sync SMS" });
+    if (!message) {
+      return res.status(404).json({ code: 404, reason: "Message not found" });
     }
+
+    res.json({ code: 200, success: true, data: { message } });
+  } catch (err) {
+    console.error("MarkAsRead Error:", err);
+    res.status(500).json({ code: 500, reason: "Failed to mark message as read" });
+  }
 };
-  
 
-// Webhook (receive SMS / delivery report)
+// ================== Sync SMS ==================
+exports.syncSms = async (req, res) => {
+  try {
+    const device = await Device.findById(req.params.deviceId);
+    if (!device) return res.status(404).json({ error: "Device not found" });
+
+    await syncDeviceSms(device);
+    res.json({ success: true });
+  } catch (err) {
+    console.error("Sync Error:", err);
+    res.status(500).json({ error: "Failed to sync SMS" });
+  }
+};
+
+// ================== Webhook (Receive SMS / Delivery Report) ==================
 exports.webhookSMS = async (req, res) => {
   try {
     const { type, mac, smses } = req.body;
@@ -362,6 +370,12 @@ exports.webhookSMS = async (req, res) => {
         sim = await Sim.create({ device: device._id, port, slot, iccid, imsi, imei });
       }
 
+      // 🔹 Find or create contact for sender
+      let contact = null;
+      if (from && !is_report) {
+        contact = await findOrCreateContact(from, device.user ? device.user.toString() : null);
+      }
+
       // 🔹 Decode SMS (reports may not have sms)
       let decodedSMS = null;
       if (sms) {
@@ -372,9 +386,10 @@ exports.webhookSMS = async (req, res) => {
         }
       }
 
-      // 🔹 Save message
+      // 🔹 Save message with contact reference
       let savedMessage = await SimMessages.create({
         sim: sim._id,
+        contact: contact ? contact._id : undefined,
         timestamp: new Date(ts * 1000),
         from,
         to,
@@ -382,13 +397,11 @@ exports.webhookSMS = async (req, res) => {
         isReport: is_report,
         sms: decodedSMS,
         rawSms: sms || null,
+        direction: 'inbound'
       });
 
-      // 🔹 Populate sim + device for output
-      savedMessage = await savedMessage.populate({
-        path: "sim",
-        populate: { path: "device" }
-      });
+      // 🔹 Populate for output
+      savedMessage = await savedMessage.populate("sim").populate("contact");
 
       // 🔹 If report → update Contact
       if (is_report && from) {
@@ -411,3 +424,92 @@ exports.webhookSMS = async (req, res) => {
   }
 };
 
+
+// ================== Delete SMS ==================
+exports.deleteSMS = async (req, res) => {
+  try {
+    const { messageId } = req.params;
+
+    const message = await SimMessages.findByIdAndDelete(messageId);
+
+    if (!message) {
+      return res.status(404).json({ code: 404, reason: "Message not found" });
+    }
+
+    res.json({ 
+      code: 200, 
+      success: true, 
+      message: "SMS deleted successfully" 
+    });
+  } catch (err) {
+    console.error("Delete SMS Error:", err);
+    res.status(500).json({ code: 500, reason: "Failed to delete SMS" });
+  }
+};
+
+// ================== Delete Conversation ==================
+exports.deleteConversation = async (req, res) => {
+  try {
+    const { phoneNumber, port, slot, deviceId } = req.body;
+
+    if (!phoneNumber || !port || !slot || !deviceId) {
+      return res.status(400).json({ 
+        code: 400, 
+        reason: "phoneNumber, port, slot, and deviceId are required" 
+      });
+    }
+
+    // Find the SIM
+    const sim = await Sim.findOne({ 
+      device: deviceId, 
+      port: parseInt(port), 
+      slot: parseInt(slot) 
+    });
+    
+    if (!sim) {
+      return res.status(404).json({ code: 404, reason: "SIM not found" });
+    }
+
+    // Delete all messages in the conversation
+    const result = await SimMessages.deleteMany({
+      sim: sim._id,
+      from: phoneNumber
+    });
+
+    res.json({ 
+      code: 200, 
+      success: true, 
+      data: { 
+        deletedCount: result.deletedCount,
+        message: `Deleted ${result.deletedCount} messages` 
+      }
+    });
+  } catch (err) {
+    console.error("Delete Conversation Error:", err);
+    res.status(500).json({ code: 500, reason: "Failed to delete conversation" });
+  }
+};
+
+// ================== Get Unread Count ==================
+exports.getUnreadCount = async (req, res) => {
+  try {
+    const { deviceId } = req.query;
+
+    let query = { read: false };
+    
+    if (deviceId) {
+      const sims = await Sim.find({ device: deviceId }).select("_id");
+      query.sim = { $in: sims.map(s => s._id) };
+    }
+
+    const unreadCount = await SimMessages.countDocuments(query);
+
+    res.json({
+      code: 200,
+      data: { unreadCount }
+    });
+  } catch (err) {
+    console.error("Get Unread Count Error:", err);
+    res.status(500).json({ code: 500, reason: "Failed to get unread count" });
+  }
+};
