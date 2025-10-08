@@ -1,6 +1,7 @@
 const Campaign = require('../models/Campaign');
 const ContactList = require('../models/ContactList');
 const CampaignStats = require("../models/campaignStats");
+const { createAndEmitNotification } = require('./notificationController');
 
 // Get all campaigns for user
 exports.getCampaigns = async (req, res) => {
@@ -276,23 +277,78 @@ exports.smsStatusWebhook = async (req, res) => {
       ).populate("user");
 
       // -------- Update or create CampaignStats --------
-      await CampaignStats.findOneAndUpdate(
-        { campaign: campaign._id, user: campaign.user._id, date: today },
-        {
-          $inc: {
-            sentMessages: sent,
-            deliveredMessages,
-            failedMessages: failed,
-            cost: totalCost,
+     // -------- Update or create CampaignStats --------
+const statsDate = new Date();
+statsDate.setUTCHours(0, 0, 0, 0);
+
+let campaignStats = await CampaignStats.findOne({
+  campaign: campaign._id,
+  user: campaign.user._id,
+  date: statsDate,
+});
+
+if (!campaignStats) {
+  // Create a new stats record for the new date
+  campaignStats = await CampaignStats.create({
+    campaign: campaign._id,
+    user: campaign.user._id,
+    date: statsDate,
+    sentMessages: sent,
+    deliveredMessages,
+    failedMessages: failed,
+    cost: totalCost,
+  });
+} else {
+  // Update existing stats record
+  await CampaignStats.updateOne(
+    { _id: campaignStats._id },
+    {
+      $inc: {
+        sentMessages: sent,
+        deliveredMessages,
+        failedMessages: failed,
+        cost: totalCost,
+      },
+    }
+  );
+}
+
+
+      // -------- Create Notification --------
+      let notificationData = {};
+      
+      if (updatedCampaign.status === 'completed') {
+        notificationData = {
+          user: campaign.user._id,
+          title: 'Campaign Completed',
+          message: `Campaign "${campaign.name}" has been completed successfully. Sent: ${sent}, Delivered: ${deliveredMessages}, Failed: ${failed}`,
+          type: 'success',
+          priority: 'medium',
+          data: {
+            campaignId: campaign._id,
+            campaignName: campaign.name,
+            sent,
+            delivered: deliveredMessages,
+            failed,
+            cost: totalCost
           },
-        },
-        { upsert: true, new: true }
-      );
+          relatedEntity: {
+            type: 'campaign',
+            entityId: campaign._id
+          }
+        };
+      } 
+
+      // Create and emit notification if we have notification data
+      if (Object.keys(notificationData).length > 0) {
+        await createAndEmitNotification(io, notificationData);
+      }
 
       // -------- Real-time updates --------
       if (io && updatedCampaign.user) {
         io.to(`user:${updatedCampaign.user._id}`).emit("campaign-update", {
           campaignId: updatedCampaign._id,
+          campaignName: updatedCampaign.name,
           updates: {
             sentMessages: updatedCampaign.sentMessages,
             deliveredMessages: updatedCampaign.deliveredMessages,

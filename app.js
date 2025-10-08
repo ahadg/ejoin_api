@@ -19,6 +19,7 @@ const smsRoutes = require('./routes/sms');
 const commandsRoutes = require('./routes/Ejoin/commands');
 const simRoutes = require('./routes/sim');
 const dashboardRoutes = require('./routes/dashboard');
+const notificationRoutes = require('./routes/notifications');
 const app = express();
 const server = http.createServer(app);
 const io = socketIo(server, {
@@ -113,6 +114,9 @@ app.use('/api/devices', deviceRoutes);
 app.use('/api/messages', messageRoutes);
 
 app.use('/api/dashboard', dashboardRoutes);
+
+app.use('/api/notifications', notificationRoutes);
+
 
 
 // 404 handler
