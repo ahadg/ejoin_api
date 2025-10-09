@@ -15,12 +15,13 @@ const contactSchema = new mongoose.Schema({
     type: String,
     required: true
   },
-  countryCode: {
-    type: String,
-    default: '+1'
-  },
+  // countryCode: {
+  //   type: String,
+  //   default: '+1'
+  // },
   firstName: String,
   lastName: String,
+  middleName: String,
   email: String,
   company: String,
   tags: [String],

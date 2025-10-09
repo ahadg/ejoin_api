@@ -48,18 +48,58 @@ exports.createContact = async (req, res) => {
   }
 };
 
-// Update contact
 exports.updateContact = async (req, res) => {
   try {
+    // Sanitize incoming payload
+    const sanitizedBody = { ...req.body };
+    for (const key in sanitizedBody) {
+      if (typeof sanitizedBody[key] === 'string') {
+        sanitizedBody[key] = sanitizedBody[key].trim().replace(/^"+|"+$/g, ''); // remove extra quotes
+      }
+    }
+
+    // 🔹 Update contact for current user
     const contact = await Contact.findOneAndUpdate(
       { _id: req.params.id, user: req.user._id },
-      { ...req.body, updatedAt: new Date() },
+      { ...sanitizedBody, updatedAt: new Date() },
       { new: true, runValidators: true }
     );
 
-    if (!contact) return res.status(404).json({ code: 404, reason: 'Contact not found' });
+    if (!contact) {
+      return res.status(404).json({ code: 404, reason: 'Contact not found' });
+    }
 
-    res.json({ code: 200, message: 'Contact updated successfully', data: { contact } });
+    // 🔹 Ensure contactList exists and belongs to same user
+    const contactList = await ContactList.findOne({ _id: contact.contactList, user: req.user._id });
+    if (!contactList) {
+      return res.status(404).json({ code: 404, reason: 'Contact list not found' });
+    }
+
+    // 🔹 Recount opted-in/out totals after update
+    const [counts] = await Contact.aggregate([
+      { $match: { contactList: contactList._id } },
+      {
+        $group: {
+          _id: null,
+          totalContacts: { $sum: 1 },
+          optedInCount: { $sum: { $cond: ['$optedIn', 1, 0] } },
+          optedOutCount: { $sum: { $cond: ['$optedIn', 0, 1] } }
+        }
+      }
+    ]);
+
+    // 🔹 Update list counts
+    await ContactList.findByIdAndUpdate(contactList._id, {
+      totalContacts: counts?.totalContacts || 0,
+      optedInCount: counts?.optedInCount || 0,
+      optedOutCount: counts?.optedOutCount || 0
+    });
+
+    res.json({
+      code: 200,
+      message: 'Contact updated successfully',
+      data: { contact }
+    });
   } catch (error) {
     console.error('Update contact error:', error);
     res.status(500).json({ code: 500, reason: 'Error updating contact' });

@@ -575,7 +575,7 @@ exports.webhookSMS = async (req, res) => {
       }
 
       // 🔹 Save regular incoming message
-      let savedMessage = await SimMessages.create({
+      const savedMessage = await SimMessages.create({
         sim: sim._id,
         contact: contact ? contact._id : undefined,
         clientNumber: from,
@@ -589,22 +589,24 @@ exports.webhookSMS = async (req, res) => {
         direction: 'inbound',
         status: 'delivered'
       });
+      
+      const populatedMessage = await SimMessages.findById(savedMessage._id)
+        .populate("sim")
+        .populate("contact");
+      
 
-      // 🔹 Populate for output
-      savedMessage = await savedMessage.populate("sim").populate("contact");
-
-      if (isUserOnline) {
+      //if (isUserOnline) {
         // User is online - emit real-time message to user room
         io.to(`user:${device.user}`).emit("sms-received", {
-          ...savedMessage.toObject(),
-          id: savedMessage._id.toString()
+          ...populatedMessage.toObject(),
+          id: populatedMessage._id.toString()
         });
         
         console.log(`Real-time SMS sent to user:${device.user}`, {
           from: from,
           message: decodedSMS ? decodedSMS.substring(0, 50) + '...' : 'No content'
         });
-      } else {
+      //} else {
         // User is offline - create notification
         const notificationData = {
           user: device.user,
@@ -622,8 +624,8 @@ exports.webhookSMS = async (req, res) => {
         };
 
         await createAndEmitNotification(io, notificationData);
-        console.log(`User offline, notification created for user:${device.user}`);
-      }
+        //console.log(`User offline, notification created for user:${device.user}`);
+      //}
     }
 
     res.status(201).json({ code: 201, success: true });

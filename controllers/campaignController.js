@@ -258,22 +258,21 @@ exports.smsStatusWebhook = async (req, res) => {
           ? Math.min(100, (completedMessages / campaign.totalContacts) * 100)
           : 0;
 
-      // -------- Update Campaign totals --------
       let updateData = {
         $inc: {
-          sentMessages: sent,
-          deliveredMessages: deliveredMessages,
-          failedMessages: failed,
-          completedMessages: completedMessages,
+          deliveredMessages: deliveredMessages, // accumulate deliveries
+          failedMessages: failed,                // accumulate failures
+          completedMessages: completedMessages,  // optional if tracking per batch
         },
-        $set: { 
-          updatedAt: new Date(), 
+        $set: {
+          sentMessages: sent,                   
+          updatedAt: new Date(),
           progress,
-          averageProcessingTime // ✅ Set average instead of accumulating
-        },
+          averageProcessingTime
+        },        
       };
 
-      if (campaign.completedMessages + completedMessages >= campaign.totalContacts) {
+      if (campaign.status != "completed" && sent >= campaign.totalContacts) {
         updateData.$set.status = "completed";
         updateData.$set.completedAt = new Date();
       }
@@ -316,11 +315,11 @@ exports.smsStatusWebhook = async (req, res) => {
           { _id: campaignStats._id },
           {
             $inc: {
-              sentMessages: sent,
               deliveredMessages,
               failedMessages: failed,
             },
             $set: {
+              sentMessages: sent,
               averageProcessingTime: newAverage // ✅ Update with new average
             }
           }
@@ -330,7 +329,7 @@ exports.smsStatusWebhook = async (req, res) => {
       // -------- Create Notification --------
       let notificationData = {};
       
-      if (updatedCampaign.status === 'completed') {
+      if (campaign.status != "completed" && sent >= campaign.totalContacts) {
         notificationData = {
           user: campaign.user._id,
           title: 'Campaign Completed',
