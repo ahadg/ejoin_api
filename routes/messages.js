@@ -1,6 +1,7 @@
 const express = require('express');
 const { auth } = require('../middleware/auth');
 const messageController = require('../controllers/messageController');
+const AIGenerationController = require('../controllers/aiGenerationController');
 
 const router = express.Router();
 
@@ -15,10 +16,8 @@ router.delete('/:id', auth, messageController.deleteMessage);
 router.post('/:id/variants', auth, messageController.createVariant);
 router.get('/:id/variants', auth, messageController.getVariants);
 
-// Templates
-router.get('/templates', auth, messageController.getTemplates);
-router.post('/templates', auth, messageController.createTemplate);
-router.put('/templates/:id', auth, messageController.updateTemplate);
-router.delete('/templates/:id', auth, messageController.deleteTemplate);
+// New AI Generation routes
+router.post('/ai/generate', auth, AIGenerationController.generateVariants);
+router.post('/ai/generate-and-save', auth, AIGenerationController.generateAndSaveMessage);
 
 module.exports = router;

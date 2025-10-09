@@ -4,6 +4,7 @@ const SimMessages = require("../models/SimMessages");
 const { syncDeviceSms, findOrCreateContact } = require("../utils/helpers");
 const Contact = require("../models/Contact");
 const ContactList = require("../models/ContactList");
+const { createAndEmitNotification } = require("./notificationController");
 
 
 
@@ -220,8 +221,7 @@ exports.sendSMS = async (req, res) => {
       sim: sim._id,
       contact: contact ? contact._id : undefined,
       timestamp: new Date(),
-      //from: sim.to || 'Unknown',
-      from: to,
+      from: sim.phoneNumber || 'Unknown',
       to: to,
       sms: sms,
       rawSms: Buffer.from(sms).toString('base64'),
@@ -333,98 +333,6 @@ exports.syncSms = async (req, res) => {
   }
 };
 
-// ================== Webhook (Receive SMS / Delivery Report) ==================
-exports.webhookSMS = async (req, res) => {
-  try {
-    const { type, mac, smses } = req.body;
-    const io = req.app.get("io"); // Socket.IO instance
-
-    if (type !== "received-sms" || !Array.isArray(smses)) {
-      return res.status(400).json({ code: 400, reason: "Invalid SMS webhook payload" });
-    }
-
-    for (const msg of smses) {
-      const {
-        is_report,
-        port,
-        slot,
-        ts,
-        from,
-        to,
-        iccid,
-        imsi,
-        imei,
-        sms
-      } = msg;
-
-      // 🔹 Identify Device by MAC
-      let device = await Device.findOne({ mac });
-      if (!device) {
-        console.warn(`Device not found for MAC: ${mac}`);
-        continue;
-      }
-
-      // 🔹 Find or create SIM
-      let sim = await Sim.findOne({ device: device._id, port, slot });
-      if (!sim) {
-        sim = await Sim.create({ device: device._id, port, slot, iccid, imsi, imei });
-      }
-
-      // 🔹 Find or create contact for sender
-      let contact = null;
-      if (from && !is_report) {
-        contact = await findOrCreateContact(from, device.user ? device.user.toString() : null);
-      }
-
-      // 🔹 Decode SMS (reports may not have sms)
-      let decodedSMS = null;
-      if (sms) {
-        try {
-          decodedSMS = Buffer.from(sms, "base64").toString("utf-8");
-        } catch (e) {
-          decodedSMS = sms;
-        }
-      }
-
-      // 🔹 Save message with contact reference
-      let savedMessage = await SimMessages.create({
-        sim: sim._id,
-        contact: contact ? contact._id : undefined,
-        timestamp: new Date(ts * 1000),
-        from,
-        to,
-        read: false,
-        isReport: is_report,
-        sms: decodedSMS,
-        rawSms: sms || null,
-        direction: 'inbound'
-      });
-
-      // 🔹 Populate for output
-      savedMessage = await savedMessage.populate("sim").populate("contact");
-
-      // 🔹 If report → update Contact
-      if (is_report && from) {
-        await Contact.findOneAndUpdate(
-          { phoneNumber: from },
-          { $set: { isReport: true, optedIn: false } }
-        );
-      }
-
-      // 🔹 Emit populated message
-      if (io) {
-        io.to(`device:${device._id}`).emit("sms-received", savedMessage);
-      }
-    }
-
-    res.status(201).json({ code: 201, success: true });
-  } catch (err) {
-    console.error("Webhook Error:", err);
-    res.status(500).json({ code: 500, reason: "Failed to save SMS" });
-  }
-};
-
-
 // ================== Delete SMS ==================
 exports.deleteSMS = async (req, res) => {
   try {
@@ -511,5 +419,216 @@ exports.getUnreadCount = async (req, res) => {
   } catch (err) {
     console.error("Get Unread Count Error:", err);
     res.status(500).json({ code: 500, reason: "Failed to get unread count" });
+  }
+};
+
+
+// ================== Webhook (Receive SMS / Delivery Report) ==================
+exports.webhookSMS = async (req, res) => {
+  try {
+    const { type, mac, smses } = req.body;
+    const io = req.app.get("io"); // Socket.IO instance
+
+    if (type !== "received-sms" || !Array.isArray(smses)) {
+      return res.status(400).json({ code: 400, reason: "Invalid SMS webhook payload" });
+    }
+
+    for (const msg of smses) {
+      const {
+        is_report,
+        port,
+        slot,
+        ts,
+        from,
+        to,
+        iccid,
+        imsi,
+        imei,
+        sms,
+        status
+      } = msg;
+
+      // 🔹 Identify Device by MAC
+      let device = await Device.findOne({ macAddress: mac });
+      if (!device) {
+        console.warn(`Device not found for MAC: ${mac}`);
+        continue;
+      }
+
+      // 🔹 Find or create SIM
+      let sim = await Sim.findOne({ device: device._id, port, slot });
+      if (!sim) {
+        sim = await Sim.create({ device: device._id, port, slot, iccid, imsi, imei });
+      }
+
+      // 🔹 Find or create contact for sender
+      let contact = null;
+      if (from) {
+        contact = await findOrCreateContact(from, device.user ? device.user.toString() : null);
+      }
+
+      // 🔹 Decode SMS (reports may not have sms)
+      let decodedSMS = null;
+      if (sms) {
+        try {
+          decodedSMS = Buffer.from(sms, "base64").toString("utf-8");
+        } catch (e) {
+          decodedSMS = sms;
+        }
+      }
+
+      // 🔹 Check if user is online (moved this up to use in both cases)
+      const userRooms = io.sockets.adapter.rooms.get(`user:${device.user}`);
+      const isUserOnline = userRooms && userRooms.size > 0;
+
+      // 🔹 Handle Delivery Reports
+      if (is_report) {
+        // Update the original message status to mark it as reported
+        await SimMessages.findOneAndUpdate(
+          { 
+            to: from, // In reports, 'from' is the original recipient
+            from: to, // In reports, 'to' is the original sender
+            port,
+            slot,
+            direction: 'outbound'
+          },
+          { 
+            $set: { 
+              status: 'reported',
+              isReport: true,
+              reportTimestamp: new Date(ts * 1000)
+            } 
+          }
+        );
+      
+        // 🔹 Save the report as a regular message in database (so it appears in conversations)
+        const reportMessage = await SimMessages.create({
+          sim: sim._id,
+          contact: contact ? contact._id : undefined,
+          clientNumber: from,
+          timestamp: new Date(ts * 1000),
+          from,
+          to,
+          read: false,
+          isReport: true,
+          sms: 'User reported this number as spam',
+          rawSms: null,
+          direction: 'inbound',
+          status: 'delivered',
+          isSpamReport: true
+        });
+        
+        // 🔹 Re-fetch with populate
+        const populatedReport = await SimMessages.findById(reportMessage._id)
+          .populate("sim")
+          .populate("contact");
+
+        if (isUserOnline) {
+          // User is online - emit real-time report as message
+          io.to(`user:${device.user}`).emit("sms-received", {
+            ...populatedReport.toObject(),
+            id: populatedReport._id.toString()
+          });
+          
+          console.log(`Real-time spam report sent to user:${device.user}`, {
+            from: from,
+            type: 'spam_report'
+          });
+        } 
+        //else {
+          // User is offline - create notification for spam report
+          const notificationData = {
+            user: device.user,
+            title: 'Spam Report Received',
+            message: `Your number was reported as spam by ${from}`,
+            type: 'warning',
+            data: {
+              messageId: populatedReport._id.toString(),
+              phoneNumber: from,
+              port,
+              slot,
+              timestamp: new Date(ts * 1000),
+              isSpamReport: true
+            }
+          };
+      
+          await createAndEmitNotification(io, notificationData);
+          console.log(`User offline, spam report notification created for user:${device.user}`);
+        //}
+      
+        // Update contact to mark as reported/spam
+        if (from) {
+          await Contact.findOneAndUpdate(
+            { phoneNumber: from },
+            { 
+              $set: { 
+                isReport: true, 
+                optedIn: false,
+                isSpam: true,
+                lastReported: new Date(ts * 1000)
+              } 
+            }
+          );
+        }
+      
+        continue; // Skip the rest of the loop for this report
+      }
+
+      // 🔹 Save regular incoming message
+      let savedMessage = await SimMessages.create({
+        sim: sim._id,
+        contact: contact ? contact._id : undefined,
+        clientNumber: from,
+        timestamp: new Date(ts * 1000),
+        from,
+        to,
+        read: false,
+        isReport: false,
+        sms: decodedSMS,
+        rawSms: sms || null,
+        direction: 'inbound',
+        status: 'delivered'
+      });
+
+      // 🔹 Populate for output
+      savedMessage = await savedMessage.populate("sim").populate("contact");
+
+      if (isUserOnline) {
+        // User is online - emit real-time message to user room
+        io.to(`user:${device.user}`).emit("sms-received", {
+          ...savedMessage.toObject(),
+          id: savedMessage._id.toString()
+        });
+        
+        console.log(`Real-time SMS sent to user:${device.user}`, {
+          from: from,
+          message: decodedSMS ? decodedSMS.substring(0, 50) + '...' : 'No content'
+        });
+      } else {
+        // User is offline - create notification
+        const notificationData = {
+          user: device.user,
+          title: 'New SMS Received',
+          message: `From: ${from} - ${decodedSMS ? decodedSMS.substring(0, 50) + (decodedSMS.length > 50 ? '...' : '') : 'No content'}`,
+          type: 'info',
+          data: {
+            messageId: savedMessage._id.toString(),
+            phoneNumber: from,
+            port,
+            slot,
+            timestamp: new Date(ts * 1000),
+            preview: decodedSMS ? decodedSMS.substring(0, 100) : ''
+          }
+        };
+
+        await createAndEmitNotification(io, notificationData);
+        console.log(`User offline, notification created for user:${device.user}`);
+      }
+    }
+
+    res.status(201).json({ code: 201, success: true });
+  } catch (err) {
+    console.error("Webhook Error:", err);
+    res.status(500).json({ code: 500, reason: "Failed to save SMS" });
   }
 };

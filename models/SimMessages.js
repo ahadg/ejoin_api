@@ -11,6 +11,7 @@ const simMessagesSchema = new mongoose.Schema({
   read: { type: Boolean, default: false },
   sms: { type: String, default: "" },
   rawSms: { type: String },
+  clientNumber: { type: String }, // Easier reporting and filtering
   direction: { 
     type: String, 
     enum: ["inbound", "outbound"], 

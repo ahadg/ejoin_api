@@ -27,7 +27,7 @@ const campaignSchema = new mongoose.Schema({
     type: Number,
     default: 0
   },
-  completedMessages: {   // ✅ add this field
+  completedMessages: {
     type: Number,
     default: 0
   },
@@ -42,9 +42,9 @@ const campaignSchema = new mongoose.Schema({
     type: String,
     required: true
   },
-  cost : {
-    type : Number,
-    default : 0
+  averageProcessingTime: {  // ✅ Renamed from 'cost'
+    type: Number,
+    default: 0
   },
   messagePreview: String,
   priority: {
@@ -65,8 +65,8 @@ const campaignSchema = new mongoose.Schema({
     of: mongoose.Schema.Types.Mixed,
     default: {}
   },
-  taskId : {
-    type : Number,
+  taskId: {
+    type: Number,
   }
 }, {
   timestamps: true

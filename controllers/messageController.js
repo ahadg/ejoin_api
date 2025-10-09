@@ -1,6 +1,5 @@
 const Message = require('../models/Message');
 const MessageVariant = require('../models/MessageVariant');
-const MessageTemplate = require('../models/MessageTemplate');
 
 // ================== Messages ==================
 exports.getMessages = async (req, res) => {
@@ -15,7 +14,7 @@ exports.getMessages = async (req, res) => {
     const messages = await Message.find(query)
       .sort({ createdAt: -1 })
       .limit(limit * 1)
-      .skip((page - 1) * limit);
+      .skip((page - 1) * limit).populate('variants'); 
 
     const total = await Message.countDocuments(query);
 
@@ -173,66 +172,3 @@ exports.getVariants = async (req, res) => {
   }
 };
 
-// ================== Templates ==================
-exports.getTemplates = async (req, res) => {
-  try {
-    const templates = await MessageTemplate.find({ user: req.user._id }).sort({ createdAt: -1 });
-    res.json({ code: 200, data: { templates } });
-  } catch (error) {
-    console.error('Get templates error:', error);
-    res.status(500).json({ code: 500, reason: 'Error fetching templates' });
-  }
-};
-
-exports.createTemplate = async (req, res) => {
-  try {
-    const template = new MessageTemplate({ ...req.body, user: req.user._id });
-    await template.save();
-
-    res.status(201).json({
-      code: 201,
-      message: 'Template created successfully',
-      data: { template }
-    });
-  } catch (error) {
-    console.error('Create template error:', error);
-    res.status(500).json({ code: 500, reason: 'Error creating template' });
-  }
-};
-
-exports.updateTemplate = async (req, res) => {
-  try {
-    const template = await MessageTemplate.findOneAndUpdate(
-      { _id: req.params.id, user: req.user._id },
-      { ...req.body, updatedAt: new Date() },
-      { new: true, runValidators: true }
-    );
-
-    if (!template) {
-      return res.status(404).json({ code: 404, reason: 'Template not found' });
-    }
-
-    res.json({
-      code: 200,
-      message: 'Template updated successfully',
-      data: { template }
-    });
-  } catch (error) {
-    console.error('Update template error:', error);
-    res.status(500).json({ code: 500, reason: 'Error updating template' });
-  }
-};
-
-exports.deleteTemplate = async (req, res) => {
-  try {
-    const template = await MessageTemplate.findOneAndDelete({ _id: req.params.id, user: req.user._id });
-    if (!template) {
-      return res.status(404).json({ code: 404, reason: 'Template not found' });
-    }
-
-    res.json({ code: 200, message: 'Template deleted successfully' });
-  } catch (error) {
-    console.error('Delete template error:', error);
-    res.status(500).json({ code: 500, reason: 'Error deleting template' });
-  }
-};

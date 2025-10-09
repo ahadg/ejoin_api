@@ -40,6 +40,8 @@ exports.getDashboardStats = async (req, res) => {
         .limit(10)
         .populate('sim', 'phoneNumber operator')
     ]);
+    
+    console.log({ todayStats, yesterdayStats });
 
     // Device Statistics
     const totalDevices = devices.length;
@@ -77,9 +79,16 @@ exports.getDashboardStats = async (req, res) => {
       ? ((totalDeliveredAllTime / totalSentAllTime) * 100).toFixed(1)
       : 0;
 
-    // Cost Statistics
-    const totalCostToday = todayStats.reduce((sum, stat) => sum + (stat.cost || 0), 0);
-    const totalCostAllTime = campaigns.reduce((sum, campaign) => sum + (campaign.cost || 0), 0);
+    // Processing Time Statistics (Updated from cost)
+    const totalProcessingTimeToday = todayStats.reduce((sum, stat) => sum + (stat.averageProcessingTime || 0), 0);
+    const avgProcessingTimeToday = todayStats.length > 0 
+      ? totalProcessingTimeToday / todayStats.length 
+      : 0;
+    
+    const totalProcessingTimeAllTime = campaigns.reduce((sum, campaign) => sum + (campaign.averageProcessingTime || 0), 0);
+    const avgProcessingTimeAllTime = campaigns.length > 0 
+      ? totalProcessingTimeAllTime / campaigns.length 
+      : 0;
 
     // Recent Activity
     const recentActivity = recentMessages.map(msg => ({
@@ -108,15 +117,16 @@ exports.getDashboardStats = async (req, res) => {
         totalCampaigns,
         activeCampaigns,
         totalContacts,
-        totalCostToday: parseFloat(totalCostToday.toFixed(4)),
-        totalCostAllTime: parseFloat(totalCostAllTime.toFixed(4)),
+        averageProcessingTimeToday: parseFloat(avgProcessingTimeToday.toFixed(2)), 
+        averageProcessingTimeAllTime: parseFloat(avgProcessingTimeAllTime.toFixed(2)), 
         
         // Performance Metrics
         performance: {
           deliveryRate: `${deliveryRate}%`,
           failureRate: `${failureRate}%`,
           averageSignal: Math.round(averageSignal),
-          messageTrend: parseFloat(messageTrend)
+          messageTrend: parseFloat(messageTrend),
+          avgProcessingTime: parseFloat(avgProcessingTimeToday.toFixed(2)) 
         },
         
         // Device Health
@@ -142,11 +152,23 @@ exports.getDashboardStats = async (req, res) => {
             : 0,
           status: campaign.status,
           sent: campaign.sentMessages,
-          total: campaign.totalContacts
+          total: campaign.totalContacts,
+          averageProcessingTime: parseFloat((campaign.averageProcessingTime || 0).toFixed(2))
         })),
         
         // Recent Activity
-        recentActivity
+        recentActivity,
+        
+        // Processing Time Insights (Optional - if you want to show more detailed metrics)
+        processingInsights: {
+          fastestCampaign: campaigns.length > 0 
+            ? Math.min(...campaigns.map(c => c.averageProcessingTime || 0)).toFixed(2)
+            : 0,
+          slowestCampaign: campaigns.length > 0 
+            ? Math.max(...campaigns.map(c => c.averageProcessingTime || 0)).toFixed(2)
+            : 0,
+          todayVsAllTime: parseFloat((avgProcessingTimeToday - avgProcessingTimeAllTime).toFixed(2))
+        }
       }
     });
   } catch (error) {

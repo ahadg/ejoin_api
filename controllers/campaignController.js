@@ -245,8 +245,13 @@ exports.smsStatusWebhook = async (req, res) => {
       if (!campaign) return null;
 
       const deliveredMessages = sdr.length;
-      const totalCost = sdr.reduce((sum, report) => sum + (report.cost || 0), 0);
+      const totalProcessingTime = sdr.reduce((sum, report) => sum + (report.cost || 0), 0);
       const completedMessages = sent + failed + unsent;
+
+      // Calculate average processing time (avoid division by zero)
+      const averageProcessingTime = deliveredMessages > 0 
+        ? totalProcessingTime / deliveredMessages 
+        : 0;
 
       const progress =
         campaign.totalContacts > 0
@@ -260,9 +265,12 @@ exports.smsStatusWebhook = async (req, res) => {
           deliveredMessages: deliveredMessages,
           failedMessages: failed,
           completedMessages: completedMessages,
-          cost: totalCost,
         },
-        $set: { updatedAt: new Date(), progress },
+        $set: { 
+          updatedAt: new Date(), 
+          progress,
+          averageProcessingTime // ✅ Set average instead of accumulating
+        },
       };
 
       if (campaign.completedMessages + completedMessages >= campaign.totalContacts) {
@@ -277,42 +285,47 @@ exports.smsStatusWebhook = async (req, res) => {
       ).populate("user");
 
       // -------- Update or create CampaignStats --------
-     // -------- Update or create CampaignStats --------
-const statsDate = new Date();
-statsDate.setUTCHours(0, 0, 0, 0);
+      const statsDate = new Date();
+      statsDate.setUTCHours(0, 0, 0, 0);
 
-let campaignStats = await CampaignStats.findOne({
-  campaign: campaign._id,
-  user: campaign.user._id,
-  date: statsDate,
-});
+      let campaignStats = await CampaignStats.findOne({
+        campaign: campaign._id,
+        user: campaign.user._id,
+        date: statsDate,
+      });
 
-if (!campaignStats) {
-  // Create a new stats record for the new date
-  campaignStats = await CampaignStats.create({
-    campaign: campaign._id,
-    user: campaign.user._id,
-    date: statsDate,
-    sentMessages: sent,
-    deliveredMessages,
-    failedMessages: failed,
-    cost: totalCost,
-  });
-} else {
-  // Update existing stats record
-  await CampaignStats.updateOne(
-    { _id: campaignStats._id },
-    {
-      $inc: {
-        sentMessages: sent,
-        deliveredMessages,
-        failedMessages: failed,
-        cost: totalCost,
-      },
-    }
-  );
-}
+      if (!campaignStats) {
+        // Create a new stats record for the new date
+        campaignStats = await CampaignStats.create({
+          campaign: campaign._id,
+          user: campaign.user._id,
+          date: statsDate,
+          sentMessages: sent,
+          deliveredMessages,
+          failedMessages: failed,
+          averageProcessingTime, // ✅ Store average processing time
+        });
+      } else {
+        // For existing stats, calculate new average
+        const totalMessages = campaignStats.deliveredMessages + deliveredMessages;
+        const newAverage = totalMessages > 0 
+          ? ((campaignStats.averageProcessingTime * campaignStats.deliveredMessages) + totalProcessingTime) / totalMessages
+          : averageProcessingTime;
 
+        await CampaignStats.updateOne(
+          { _id: campaignStats._id },
+          {
+            $inc: {
+              sentMessages: sent,
+              deliveredMessages,
+              failedMessages: failed,
+            },
+            $set: {
+              averageProcessingTime: newAverage // ✅ Update with new average
+            }
+          }
+        );
+      }
 
       // -------- Create Notification --------
       let notificationData = {};
@@ -330,7 +343,7 @@ if (!campaignStats) {
             sent,
             delivered: deliveredMessages,
             failed,
-            cost: totalCost
+            averageProcessingTime: Math.round(averageProcessingTime * 100) / 100 // ✅ Rounded to 2 decimal places
           },
           relatedEntity: {
             type: 'campaign',
@@ -355,7 +368,7 @@ if (!campaignStats) {
             failedMessages: updatedCampaign.failedMessages,
             progress: updatedCampaign.progress,
             status: updatedCampaign.status,
-            cost: updatedCampaign.cost,
+            averageProcessingTime: updatedCampaign.averageProcessingTime, // ✅ Updated field name
             updatedAt: updatedCampaign.updatedAt,
           },
         });
@@ -377,4 +390,3 @@ if (!campaignStats) {
     res.status(500).json({ code: 500, reason: "Error processing webhook" });
   }
 };
-
