@@ -1,4 +1,7 @@
 const deviceModel = require('../models/Device');
+const DeviceClient = require('../services/deviceClient');
+const { syncDeviceSms } = require('../utils/helpers');
+const { processDeviceStatus } = require('./Ejoin/statusController');
 
 // Get all devices for user
 exports.getDevices = async (req, res) => {
@@ -31,23 +34,48 @@ exports.createDevice = async (req, res) => {
     const { name, ipAddress, location, totalSlots, dailyLimit, password, port, username } = req.body;
     console.log("/devices/create", req.body);
 
-    const device = new deviceModel({
-      name,
-      ipAddress,
-      location,
-      totalSlots,
-      dailyLimit,
-      password,
-      port,
-      username,
-      user: req.user._id
-    });
+    const client = new DeviceClient({ipAddress: ipAddress, port: port, username: username, password: password});
+  
+    // Get current status with additional parameters
+    const params = {username: username, password: password};
+    
+    const data = await client.getStatus(params);
+    console.log("getStatus_data", data);
+    let device = null;
+    // Process device and SIM data in database
+    if(data?.reason != 'invalid username or password!') {
+      device = new deviceModel({
+        name,
+        ipAddress,
+        location,
+        totalSlots,
+        dailyLimit,
+        password,
+        port,
+        username,
+        user: req.user._id,
+        macAddress: data.mac,
+        maxPorts: data['max-ports'],
+        maxSlots: data['max-slot'],
+        firmwareVersion: data.ver,
+        status: "online",
+        activeSlots: data['max-ports'],
+        //data.status.filter(port => port.inserted === 1 && port.slot_active === 1).length,
+        lastSeen: new Date(),
+        updatedAt: new Date()
+        //...data
+      });
+  
+      // Fire and forget sync
+      //syncDeviceSms(device);
+  
+      await device.save();
+      processDeviceStatus(data,device);
+    } else {
+      return res.status(500).json({ code: 500, reason: 'invalid username or password!' });
+    }
 
-    // Fire and forget sync
-    syncDeviceSms(device);
-
-    await device.save();
-    res.status(201).json({ code: 201, message: 'Device created successfully', data: { device } });
+    res.status(201).json({ code: 201, message: 'Device created successfully', device });
   } catch (error) {
     console.error('Create device error:', error);
     res.status(500).json({ code: 500, reason: 'Error creating device' });

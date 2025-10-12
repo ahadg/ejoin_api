@@ -109,7 +109,7 @@ exports.getDashboardStats = async (req, res) => {
       data: {
         // Core Stats for Cards
         activeDevices: `${activeDevices}/${totalDevices}`,
-        activeSIMs: `${activeSIMs}/${totalSIMs}`,
+        activeSIMs: `${activeSIMs || 0}/${totalSIMs || 0}`,
         messagesSentToday: totalSentToday,
         successRate: `${successRate}%`,
         
@@ -200,7 +200,7 @@ exports.getDashboardDevices = async (req, res) => {
           ipAddress: device.ipAddress,
           location: device.location,
           totalSlots: device.totalSlots,
-          activeSlots: activeSims.length,
+          activeSlots: device.activeSlots,
           lastSeen: device.lastSeen,
           temperature: device.temperature,
           uptime: device.uptime,

@@ -220,3 +220,10 @@ function getSIMStatus(statusCode) {
   }
   return "unknown";
 }
+
+module.exports = {
+  getStatus: exports.getStatus,
+  statusNotification: exports.statusNotification,
+  processDeviceStatus,
+  processPortStatus
+};
