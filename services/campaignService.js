@@ -10,6 +10,8 @@ const MessageVariant = require('../models/MessageVariant');
 //const { messageAPI } = require('../lib/api/messages');
 const redis = require('../config/redis');
 const DeviceClient = require('./deviceClient');
+const aiGenerationController = require('../controllers/aiGenerationController');
+
 
 class CampaignService {
   constructor() {
@@ -167,7 +169,7 @@ class CampaignService {
 
       // Generate message variant
       const finalMessage = await this.generateMessageVariant(campaignId, campaign.taskSettings || {}, contact);
-
+      console.log("finalMessage",finalMessage);
       // Prepare SMS task (same structure you had)
       const smsTask = {
         id: Number(`${Date.now()}${Math.floor(Math.random() * 1000)}`),
@@ -236,60 +238,127 @@ class CampaignService {
 
   // Generate message variant (AI or static) - unchanged
   async generateMessageVariant(campaignId, taskSettings, contact) {
-    const campaign = await Campaign.findById(campaignId).populate('message');
-    console.log("generateMessageVariant_start",{campaign,message : campaign?.message, taskSettings, contact});
-    if (taskSettings.useAiGeneration && taskSettings.aiPrompt) {
+    const campaign = await Campaign.findById(campaignId)
+      .populate('message')
+      .populate({
+        path: 'message',
+        populate: { path: 'variants', model: 'MessageVariant' }
+      });
+  
+    console.log("generateMessageVariant_start", { 
+      campaignId, 
+      messageVariationType: campaign?.taskSettings?.messageVariationType,
+      useAiGeneration: campaign?.taskSettings?.useAiGeneration,
+      contact: contact?.phoneNumber 
+    });
+  
+    // Handle single_variant type - use campaign's messageContent
+    if (campaign?.taskSettings?.messageVariationType === 'single_variant') {
+      console.log("Using single variant from messageContent");
+      return {
+        content: campaign.messageContent || 'Default message',
+        variantId: 'single-base-message',
+        tone: 'Professional',
+        characterCount: (campaign.messageContent || 'Default message').length
+      };
+    }
+  
+    // Handle multiple_variants type - randomly select from message variants
+    if (campaign?.taskSettings?.messageVariationType === 'multiple_variants') {
+      if (campaign?.message?.variants && campaign.message.variants.length > 0) {
+        const randomVariant = campaign.message.variants[
+          Math.floor(Math.random() * campaign.message.variants.length)
+        ];
+        console.log("Selected random variant from multiple variants:", randomVariant._id);
+        return {
+          content: randomVariant.content,
+          variantId: randomVariant._id,
+          tone: randomVariant.tone || 'Professional',
+          characterCount: randomVariant.characterCount
+        };
+      } else {
+        console.log("No variants found, falling back to base message");
+        // Fallback to base message if no variants exist
+        return {
+          content: campaign?.messageContent || 'Default message',
+          variantId: 'fallback-base-message',
+          tone: 'Professional',
+          characterCount: (campaign?.messageContent || 'Default message').length
+        };
+      }
+    }
+  
+    // Handle ai_random type - generate AI variant
+    if (campaign?.taskSettings?.messageVariationType === 'ai_random' || 
+        campaign?.taskSettings?.useAiGeneration) {
+      
+      console.log("Generating AI variant for contact:", contact.phoneNumber);
+      // Use the AI generation controller
       try {
-        // Generate AI message variant on the fly (uncomment & adapt your API)
-        const aiResponse = await messageAPI.generateVariants({
-          prompt: taskSettings.aiPrompt,
+        const aiResponse = await aiGenerationController.generateWithGrok({
+          prompt: campaign?.taskSettings?.aiPrompt || campaign?.messageContent,
           variantCount: 1,
           characterLimit: 160,
           tones: ['Professional', 'Friendly', 'Urgent'],
           languages: ['English'],
           creativityLevel: 0.8,
           includeEmojis: true,
-          companyName: taskSettings.companyName || 'Our Company',
+          companyName: campaign?.taskSettings?.companyName || 'Your company',
           unsubscribeText: 'Reply STOP to unsubscribe',
-          customInstructions: `Include personalization for ${contact.firstName || 'customer'}`
+          customInstructions: ``
         });
-
-        if (aiResponse.data?.variants?.[0]?.content) {
-          const variant = aiResponse.data.variants[0];
+        console.log("aiResponse",aiResponse);
+        console.log("aiResponse_content",aiResponse?.[0]?.content);
+  
+        if (aiResponse && aiResponse[0]?.content) {
+          const variant = aiResponse?.[0];
+          console.log("AI variant generated successfully");
           return {
             content: variant.content,
             variantId: `ai-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-            tone: variant.tone,
+            tone: variant.tone || 'AI-Generated',
             characterCount: variant.characterCount
           };
         }
       } catch (error) {
         console.error('AI message generation failed, using fallback:', error);
-        // Fall back to base message
+        // Fall through to fallback options
       }
-    }
-
-    // Use static variants from message or base message
-    if (campaign?.message?.variants && campaign.message.variants.length > 0) {
-      const randomVariant = campaign.message.variants[
-        Math.floor(Math.random() * campaign.message.variants.length)
-      ];
+  
+      // AI fallback: try message variants
+      if (campaign?.message?.variants && campaign.message.variants.length > 0) {
+        const randomVariant = campaign.message.variants[
+          Math.floor(Math.random() * campaign.message.variants.length)
+        ];
+        console.log("AI failed, using random variant as fallback");
+        return {
+          content: randomVariant.content,
+          variantId: randomVariant._id,
+          tone: randomVariant.tone || 'Professional',
+          characterCount: randomVariant.characterCount
+        };
+      }
+  
+      // Final fallback: use base message
+      console.log("Using base message as final fallback");
       return {
-        content: randomVariant.content,
-        variantId: randomVariant._id,
-        tone: randomVariant.tone,
-        characterCount: randomVariant.characterCount
+        content: campaign?.messageContent || campaign?.taskSettings?.aiPrompt || 'Default message',
+        variantId: 'ai-fallback-base-message',
+        tone: 'Professional',
+        characterCount: (campaign?.messageContent || campaign?.taskSettings?.aiPrompt || 'Default message').length
       };
     }
-
-    // Use campaign's base message
+  
+    // Default fallback if no conditions matched
+    console.log("No message variation type specified, using default");
     return {
-      content: campaign?.messageContent || taskSettings.aiPrompt || 'Default message',
-      variantId: 'base-message',
+      content: campaign?.messageContent || 'Default message',
+      variantId: 'default-base-message',
       tone: 'Professional',
-      characterCount: (campaign?.messageContent || taskSettings.aiPrompt || 'Default message').length
+      characterCount: (campaign?.messageContent || 'Default message').length
     };
   }
+  
 
   // Check daily message limits (kept but worker also checks device each iteration)
   async checkDailyLimit(campaignId, deviceId) {

@@ -56,7 +56,7 @@ const campaignSchema = new mongoose.Schema({
       type: mongoose.Schema.Types.ObjectId,
       ref: 'MessageVariant',
     },
-    messageVariationType: { type: String, enum: ['single_variant','multiple_variants', 'ai_random'], default: 'static' },
+    messageVariationType: { type: String, enum: ['single_variant','multiple_variants', 'ai_random'], default: 'single_variant' },
     useAiGeneration: { type: Boolean, default: false },
     aiPrompt: { type: String, default: '' },
     companyName: { type: String, default: '' }
