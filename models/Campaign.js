@@ -1,75 +1,106 @@
 const mongoose = require('mongoose');
 
 const campaignSchema = new mongoose.Schema({
-  user: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
-    required: true
-  },
   name: {
     type: String,
-    required: true
+    required: true,
+    trim: true
   },
-  status: {
-    type: String,
-    enum: ['active', 'paused', 'completed', 'scheduled'],
-    default: 'scheduled'
-  },
-  totalContacts: {
-    type: Number,
-    default: 0
-  },
-  sentMessages: {
-    type: Number,
-    default: 0
-  },
-  deliveredMessages: {
-    type: Number,
-    default: 0
-  },
-  completedMessages: {
-    type: Number,
-    default: 0
-  },
-  failedMessages: {
-    type: Number,
-    default: 0
-  },
-  scheduledDate: {
-    type: Date
+  message: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Message'
   },
   messageContent: {
     type: String,
     required: true
   },
-  averageProcessingTime: {  // ✅ Renamed from 'cost'
-    type: Number,
-    default: 0
+  messagePreview: {
+    type: String
   },
-  messagePreview: String,
+  contactList: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'ContactList',
+    required: true
+  },
+  device: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Device',
+    required: true
+  },
+  status: {
+    type: String,
+    enum: ['scheduled', 'active', 'paused', 'completed', 'cancelled'],
+    default: 'scheduled'
+  },
   priority: {
     type: String,
     enum: ['low', 'normal', 'high'],
     default: 'normal'
   },
-  contactList: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'ContactList'
-  },
-  device: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Device'
-  },
   taskSettings: {
-    type: Map,
-    of: mongoose.Schema.Types.Mixed,
-    default: {}
+    interval_min: { type: Number, default: 30000 },
+    interval_max: { type: Number, default: 90000 },
+    timeout: { type: Number, default: 30 },
+    charset: { type: String, enum: ['UTF-8', 'Base64', 'PDU'], default: 'UTF-8' },
+    coding: { type: Number, enum: [0, 1, 2], default: 0 },
+    sms_type: { type: Number, enum: [0, 1, 2], default: 0 },
+    sdr: { type: Boolean, default: true },
+    fdr: { type: Boolean, default: true },
+    dr: { type: Boolean, default: true },
+    to_all: { type: Boolean, default: false },
+    flash_sms: { type: Boolean, default: false },
+    sms_count: { type: Number, default: 100 },
+    sms_period: { type: Number, default: 60 },
+    dailyMessageLimit: { type: Number, default: 300 },
+    messageVariantType: { type: String, enum: ['static', 'ai_random'], default: 'static' },
+    useAiGeneration: { type: Boolean, default: false },
+    aiPrompt: { type: String, default: '' },
+    companyName: { type: String, default: '' }
   },
-  taskId: {
-    type: Number,
+  // Statistics
+  totalContacts: { type: Number, default: 0 },
+  sentMessages: { type: Number, default: 0 },
+  sentMessagesToday: { type: Number, default: 0 },
+  deliveredMessages: { type: Number, default: 0 },
+  failedMessages: { type: Number, default: 0 },
+  deliveryRate: { type: Number, default: 0 },
+  
+  // Timestamps
+  scheduledDate: { type: Date },
+  processingStartedAt: { type: Date },
+  completedAt: { type: Date },
+  pauseReason: { type: String },
+  
+  // Task management
+  taskId: [{ type: Number }],
+  
+  user: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: true
   }
 }, {
   timestamps: true
 });
+
+// Indexes
+campaignSchema.index({ user: 1, status: 1 });
+campaignSchema.index({ contactList: 1 });
+campaignSchema.index({ device: 1 });
+campaignSchema.index({ createdAt: -1 });
+
+// Virtual for progress percentage
+campaignSchema.virtual('progress').get(function() {
+  if (this.totalContacts === 0) return 0;
+  return Math.min(100, (this.sentMessages / this.totalContacts) * 100);
+});
+
+// Method to update delivery rate
+campaignSchema.methods.updateDeliveryRate = function() {
+  if (this.sentMessages > 0) {
+    this.deliveryRate = (this.deliveredMessages / this.sentMessages) * 100;
+  }
+  return this.deliveryRate;
+};
 
 module.exports = mongoose.model('Campaign', campaignSchema);

@@ -4,6 +4,15 @@ const campaignController = require('../controllers/campaignController');
 
 const router = express.Router();
 
+
+// Add these new routes
+router.post('/:id/start-processing', campaignController.startCampaignProcessing);
+router.post('/:id/pause', campaignController.pauseCampaign);
+router.post('/:id/resume', campaignController.resumeCampaign);
+router.post('/:id/stop', campaignController.stopCampaign);
+
+
+
 router.get('/', auth, campaignController.getCampaigns);
 router.get('/:id', auth, campaignController.getCampaignById);
 router.post('/', auth, campaignController.createCampaign);

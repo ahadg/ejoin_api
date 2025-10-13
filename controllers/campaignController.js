@@ -2,6 +2,7 @@ const Campaign = require('../models/Campaign');
 const ContactList = require('../models/ContactList');
 const CampaignStats = require("../models/campaignStats");
 const { createAndEmitNotification } = require('./notificationController');
+const CampaignService = require('../services/campaignService');
 
 // Get all campaigns for user
 exports.getCampaigns = async (req, res) => {
@@ -216,6 +217,75 @@ exports.updateCampaignStatus = async (req, res) => {
   } catch (error) {
     console.error('Update campaign status error:', error);
     res.status(500).json({ code: 500, reason: 'Error updating campaign status' });
+  }
+};
+
+// Start campaign processing
+exports.startCampaignProcessing = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const result = await CampaignService.startCampaignProcessing(id);
+
+    res.json({
+      code: 200,
+      message: 'Campaign processing started',
+      data: result
+    });
+  } catch (error) {
+    console.error('Start campaign processing error:', error);
+    res.status(500).json({ code: 500, reason: error.message });
+  }
+};
+
+// Pause campaign
+exports.pauseCampaign = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    await CampaignService.pauseCampaign(id);
+
+    res.json({
+      code: 200,
+      message: 'Campaign paused successfully'
+    });
+  } catch (error) {
+    console.error('Pause campaign error:', error);
+    res.status(500).json({ code: 500, reason: error.message });
+  }
+};
+
+// Resume campaign
+exports.resumeCampaign = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    await CampaignService.resumeCampaign(id);
+
+    res.json({
+      code: 200,
+      message: 'Campaign resumed successfully'
+    });
+  } catch (error) {
+    console.error('Resume campaign error:', error);
+    res.status(500).json({ code: 500, reason: error.message });
+  }
+};
+
+// Stop campaign
+exports.stopCampaign = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    await CampaignService.stopCampaign(id);
+
+    res.json({
+      code: 200,
+      message: 'Campaign stopped successfully'
+    });
+  } catch (error) {
+    console.error('Stop campaign error:', error);
+    res.status(500).json({ code: 500, reason: error.message });
   }
 };
 
