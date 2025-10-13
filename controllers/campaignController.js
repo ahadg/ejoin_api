@@ -62,7 +62,7 @@ exports.createCampaign = async (req, res) => {
   try {
     const {
       name, contactList, device, messageContent,
-      scheduledDate, priority, taskSettings, totalContacts, status
+      scheduledDate, priority, taskSettings, totalContacts, status, message
     } = req.body;
 
     // Verify contact list belongs to user
@@ -84,6 +84,7 @@ exports.createCampaign = async (req, res) => {
       contactList,
       device,
       messageContent,
+      message,
       scheduledDate,
       priority,
       taskSettings,

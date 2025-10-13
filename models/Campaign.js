@@ -29,7 +29,7 @@ const campaignSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['scheduled', 'active', 'paused', 'completed', 'cancelled'],
+    enum: ['scheduled', 'active', 'paused', 'completed', 'cancelled','pending'],
     default: 'scheduled'
   },
   priority: {
@@ -52,7 +52,11 @@ const campaignSchema = new mongoose.Schema({
     sms_count: { type: Number, default: 100 },
     sms_period: { type: Number, default: 60 },
     dailyMessageLimit: { type: Number, default: 300 },
-    messageVariantType: { type: String, enum: ['static', 'ai_random'], default: 'static' },
+    selectedVariantId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'MessageVariant',
+    },
+    messageVariationType: { type: String, enum: ['single_variant','multiple_variants', 'ai_random'], default: 'static' },
     useAiGeneration: { type: Boolean, default: false },
     aiPrompt: { type: String, default: '' },
     companyName: { type: String, default: '' }
@@ -64,6 +68,11 @@ const campaignSchema = new mongoose.Schema({
   deliveredMessages: { type: Number, default: 0 },
   failedMessages: { type: Number, default: 0 },
   deliveryRate: { type: Number, default: 0 },
+
+
+sentCount: { type: Number, default: 0 },
+pausedAt: Date,
+resumedAt: Date,
   
   // Timestamps
   scheduledDate: { type: Date },

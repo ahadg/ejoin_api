@@ -151,6 +151,30 @@ app.get('/health/redis', async (req, res) => {
   }
 });
 
+// Get info about all queues or a specific queue
+app.get('/api/queues', async (req, res) => {
+  try {
+    const queueName = req.query.name;
+
+    if (queueName) {
+      // Return metrics for a specific queue
+      const metrics = await redis.getQueueMetrics(queueName);
+      return res.json({ status: 'success', data: metrics });
+    }
+
+    // Otherwise, return metrics for all queues
+    const allMetrics = await redis.getAllQueueMetrics();
+    res.json({ status: 'success', data: allMetrics });
+  } catch (error) {
+    console.error('Error fetching queue metrics:', error);
+    res.status(500).json({
+      status: 'error',
+      message: error.message,
+    });
+  }
+});
+
+
 // Authentication routes
 app.use('/api/auth', authRoutes);
 

@@ -52,6 +52,7 @@ const deviceSchema = new mongoose.Schema({
     type: Number,
     default: 15000
   },
+  sentToday: { type: Number, default: 0 },
   lastSeen: {
     type: Date,
     default: Date.now
