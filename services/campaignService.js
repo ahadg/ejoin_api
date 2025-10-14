@@ -6,17 +6,18 @@ const Contact = require('../models/Contact');
 const Device = require('../models/Device');
 const Message = require('../models/Message');
 const MessageVariant = require('../models/MessageVariant');
-//const { EjoinAPI } = require('../lib/api/ejoin');
-//const { messageAPI } = require('../lib/api/messages');
 const redis = require('../config/redis');
 const DeviceClient = require('./deviceClient');
 const aiGenerationController = require('../controllers/aiGenerationController');
+const messageTrackingService = require('./messageTrackingService'); // Import the service
+
 
 
 class CampaignService {
   constructor() {
     this.queues = new Map();   // queueName -> Queue
     this.workers = new Map();  // queueName -> Worker
+    this.messageTracking = messageTrackingService; 
     this.init();
   }
 
@@ -69,6 +70,49 @@ class CampaignService {
     return queue;
   }
 
+  // Emit campaign progress via socket.io
+  async emitCampaignProgress(campaignId) {
+    try {
+      const { io } = require('../app');
+      const campaign = await Campaign.findById(campaignId)
+        .populate('user', '_id')
+        .populate('contactList');
+      
+      if (!campaign || !campaign.user) {
+        console.log(`Campaign or user not found for progress emission: ${campaignId}`);
+        return;
+      }
+
+      // Calculate progress percentage
+      const totalContacts = campaign.contactList?.contactCount || 0;
+      const progress = totalContacts > 0 ? Math.round((campaign.sentCount / totalContacts) * 100) : 0;
+
+      const updateData = {
+        campaignId: campaign._id,
+        campaignName: campaign.name,
+        updates: {
+          sentMessages: campaign.sentMessages || 0,
+          deliveredMessages: campaign.deliveredMessages || 0,
+          failedMessages: campaign.failedMessages || 0,
+          progress: progress,
+          status: campaign.sentCount >= campaign.totalContacts ? 'completed' : campaign.status,
+          averageProcessingTime: campaign.averageProcessingTime || 0,
+          updatedAt: campaign.updatedAt,
+        },
+      };
+
+      // Emit to user-specific room
+      io.to(`user:${campaign.user._id}`).emit("campaign-update", updateData);
+      
+      // Also emit to campaign-specific room for more granular listening
+      //io.to(`campaign:${campaignId}`).emit("campaign-progress", updateData);
+
+      console.log(`Progress emitted for campaign ${campaignId}: ${progress}%`);
+    } catch (error) {
+      console.error(`Error emitting campaign progress for ${campaignId}:`, error);
+    }
+  }
+
   // New: process entire campaign job (the worker will call this)
   async processCampaignJob(job) {
     // job.data: { campaignId }
@@ -108,6 +152,8 @@ class CampaignService {
     if (!contacts || contacts.length === 0) {
       console.log(`No opted-in contacts for campaign ${campaignId}`);
       await Campaign.findByIdAndUpdate(campaignId, { status: 'completed', completedAt: new Date() });
+      // Emit final progress update
+      await this.emitCampaignProgress(campaignId);
       return;
     }
 
@@ -117,11 +163,16 @@ class CampaignService {
     if (startIndex >= contacts.length) {
       console.log(`Campaign ${campaignId} already finished (sentCount >= contacts)`);
       await Campaign.findByIdAndUpdate(campaignId, { status: 'completed', completedAt: new Date() });
+      // Emit final progress update
+      await this.emitCampaignProgress(campaignId);
       return;
     }
 
     // Ensure campaign status
     await Campaign.findByIdAndUpdate(campaignId, { status: 'active', processingStartedAt: campaign.processingStartedAt || new Date() });
+
+    // Emit initial progress update
+    await this.emitCampaignProgress(campaignId);
 
     // iterate contacts sequentially starting from startIndex
     for (let i = startIndex; i < contacts.length; i++) {
@@ -188,15 +239,34 @@ class CampaignService {
         flash_sms: campaign.taskSettings?.flash_sms || false,
         recipients: [contact.phoneNumber],
       };
+      const startTime = Date.now();
 
       try {
         const client = new DeviceClient(freshDevice);
         const ejoinResponse = await client.sendSms(smsTask);
+        const processingTime = Date.now() - startTime;
         console.log("sendSms_result", ejoinResponse);
 
         if (ejoinResponse?.[0]?.reason === "OK") {  
+
+        await this.messageTracking.trackMessage({
+            campaignId,
+            contactId: contact._id,
+            phoneNumber: contact.phoneNumber,
+            content: finalMessage.content,
+            variantId: finalMessage.variantId,
+            tone: finalMessage.tone,
+            characterCount: finalMessage.characterCount,
+            deviceId: freshDevice._id,
+            deviceName: freshDevice.name,
+            taskId: smsTask.id,
+            status: 'sent',
+            processingTime: processingTime,
+            response: ejoinResponse[0],
+            userId: campaign.user
+            });
           // update campaign stats and device counters
-          await this.updateCampaignStats(campaignId, { sentMessages: 1, lastSentAt: new Date() });
+          //await this.updateCampaignStats(campaignId, { sentMessages: 1, lastSentAt: new Date() });
           await this.updateDeviceDailyCount(freshDevice._id);
 
           // optionally persist lastSentContactIndex
@@ -204,17 +274,60 @@ class CampaignService {
             $set: { lastSentContactId: contact._id, updatedAt: new Date() }
           });
 
-          // optionally emit progress events here (socket io) - not implemented
+          // Emit progress update after successful send
+          await this.emitCampaignProgress(campaignId);
         } else {
+
+        await this.messageTracking.trackMessage({
+            campaignId,
+            contactId: contact._id,
+            phoneNumber: contact.phoneNumber,
+            content: finalMessage.content,
+            variantId: finalMessage.variantId,
+            tone: finalMessage.tone,
+            characterCount: finalMessage.characterCount,
+            deviceId: freshDevice._id,
+            deviceName: freshDevice.name,
+            taskId: smsTask.id,
+            status: 'failed',
+            processingTime: processingTime,
+            response: ejoinResponse?.[0],
+            error: ejoinResponse?.[0]?.reason || 'Unknown error',
+            userId: campaign.user
+            });
+        
           // treat as failure (increment failedMessages)
           console.error(`SMS send responded with error for campaign ${campaignId}`, ejoinResponse);
           await this.updateCampaignStats(campaignId, { failedMessages: 1 });
+          // Emit progress update even on failure to show failed count
+          await this.emitCampaignProgress(campaignId);
           // depending on strategy, you might continue or pause; we'll continue
         }
 
       } catch (err) {
+        const processingTime = Date.now() - startTime;
+
+        await this.messageTracking.trackMessage({
+            campaignId,
+            contactId: contact._id,
+            phoneNumber: contact.phoneNumber,
+            content: finalMessage.content,
+            variantId: finalMessage.variantId,
+            tone: finalMessage.tone,
+            characterCount: finalMessage.characterCount,
+            deviceId: freshDevice._id,
+            deviceName: freshDevice.name,
+            taskId: smsTask.id,
+            status: 'failed',
+            processingTime: processingTime,
+            error: err.message,
+            userId: campaign.user
+          });
+
         console.error(`Error sending SMS for campaign ${campaignId} to ${contact.phoneNumber}:`, err);
         await this.updateCampaignStats(campaignId, { failedMessages: 1 });
+        // Emit progress update on error
+        await this.emitCampaignProgress(campaignId);
         // Optionally implement retry/backoff here; for now continue to next contact
       }
 
@@ -232,6 +345,10 @@ class CampaignService {
       status: 'completed',
       completedAt: new Date()
     });
+    
+    // Emit final progress update
+    await this.emitCampaignProgress(campaignId);
+    
     console.log(`Campaign ${campaignId} completed successfully`);
     return;
   }
@@ -412,6 +529,9 @@ class CampaignService {
         processingStartedAt: new Date()
       });
 
+      // Emit initial status update
+      await this.emitCampaignProgress(campaignId);
+
       console.log(`Queued campaign ${campaignId} for processing`);
       return { success: true };
     } catch (error) {
@@ -444,6 +564,9 @@ class CampaignService {
       pausedAt: new Date()
     });
 
+    // Emit status update
+    await this.emitCampaignProgress(campaignId);
+
     console.log(`Campaign ${campaignId} paused: ${reason}`);
   }
 
@@ -474,6 +597,9 @@ class CampaignService {
       pauseReason: null,
       resumedAt: new Date()
     });
+
+    // Emit status update
+    await this.emitCampaignProgress(campaignId);
 
     console.log(`Campaign ${campaignId} resumed`);
   }
@@ -507,27 +633,30 @@ class CampaignService {
       completedAt: new Date()
     });
 
+    // Emit final status update
+    await this.emitCampaignProgress(campaignId);
+
     console.log(`Campaign ${campaignId} stopped`);
   }
 
   // Update campaign stats (incremental updates)
   async updateCampaignStats(campaignId, updates) {
     const updateData = {
-      $inc: updates,
+      $inc: { ...updates },
       $set: { updatedAt: new Date() }
     };
-
-    if (updates.sentMessages) {
+  
+    if (updates.sentMessages && !('sentMessagesToday' in updateData.$inc)) {
       updateData.$inc.sentMessagesToday = updates.sentMessages;
     }
-
-    // Also increment sentCount for progress tracking if sentMessages present
-    if (!updateData.$inc.sentCount && updates.sentMessages) {
+  
+    if (updates.sentMessages && !('sentCount' in updateData.$inc)) {
       updateData.$inc.sentCount = updates.sentMessages;
     }
-
+  
     await Campaign.findByIdAndUpdate(campaignId, updateData);
   }
+  
 
   // Update device daily count
   async updateDeviceDailyCount(deviceId) {
