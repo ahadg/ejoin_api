@@ -4,10 +4,6 @@ const Campaign = require('../models/Campaign');
 const ContactList = require('../models/ContactList');
 const Contact = require('../models/Contact');
 const Device = require('../models/Device');
-const Message = require('../models/Message');
-const MessageVariant = require('../models/MessageVariant');
-//const { EjoinAPI } = require('../lib/api/ejoin');
-//const { messageAPI } = require('../lib/api/messages');
 const redis = require('../config/redis');
 const DeviceClient = require('./deviceClient');
 const aiGenerationController = require('../controllers/aiGenerationController');
@@ -28,7 +24,7 @@ class CampaignService {
     this.cleanupStuckJobs();
 
     // Start daily reset scheduler (kept for safety; you also have a cron job)
-    this.startDailyResetScheduler();
+    //this.startDailyResetScheduler();
   }
 
   // Create campaign queue and worker (one queue per campaign)
@@ -622,12 +618,12 @@ class CampaignService {
   }
 
   // Start daily reset scheduler (fallback in case cron job isn't used)
-  startDailyResetScheduler() {
-    // Run every day at midnight (server local time)
-    setInterval(() => {
-      this.resetDailyCounts().catch(err => console.error('resetDailyCounts error:', err));
-    }, 24 * 60 * 60 * 1000); // 24 hours
-  }
+  // startDailyResetScheduler() {
+  //   // Run every day at midnight (server local time)
+  //   setInterval(() => {
+  //     this.resetDailyCounts().catch(err => console.error('resetDailyCounts error:', err));
+  //   }, 24 * 60 * 60 * 1000); // 24 hours
+  // }
 
   // Cleanup stuck jobs
   async cleanupStuckJobs() {

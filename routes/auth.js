@@ -2,6 +2,8 @@ const express = require('express');
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const { auth, JWT_SECRET } = require('../middleware/auth');
+const { sendPasswordEmail } = require('../utils/emailService');
+const crypto = require('crypto');
 
 const router = express.Router();
 
@@ -151,5 +153,86 @@ router.put('/change-password', auth, async (req, res) => {
     });
   }
 });
+
+// Forgot password - generate reset token and send email
+router.post('/forgot-password', async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    // Find user
+    const user = await User.findOne({ email });
+    if (!user) {
+      // Don't reveal whether email exists or not for security
+      return res.json({
+        code: 200,
+        message: 'If an account with that email exists, a password reset link has been sent.'
+      });
+    }
+
+    // Generate reset token
+    const resetToken = crypto.randomBytes(32).toString('hex');
+    const resetTokenExpiry = Date.now() + 24 * 60 * 60 * 1000; // 24 hours
+
+    // Save token to user
+    user.resetPasswordToken = resetToken;
+    user.resetPasswordExpires = resetTokenExpiry;
+    await user.save();
+
+    // Generate reset link
+    const resetLink = `${process.env.FRONTEND_URL || 'http://localhost:8080'}/reset-password?token=${resetToken}`;
+
+    // Send email
+    await sendPasswordEmail(email, resetLink);
+
+    res.json({
+      code: 200,
+      message: 'If an account with that email exists, a password reset link has been sent.'
+    });
+  } catch (error) {
+    console.error('Forgot password error:', error);
+    res.status(500).json({
+      code: 500,
+      reason: 'Error processing password reset request'
+    });
+  }
+});
+
+// Reset password - validate token and set new password
+router.post('/reset-password', async (req, res) => {
+  try {
+    const { token, newPassword } = req.body;
+
+    // Find user by valid reset token
+    const user = await User.findOne({
+      resetPasswordToken: token,
+      resetPasswordExpires: { $gt: Date.now() }
+    });
+
+    if (!user) {
+      return res.status(400).json({
+        code: 400,
+        reason: 'Invalid or expired reset token'
+      });
+    }
+
+    // Update password and clear reset token
+    user.password = newPassword;
+    user.resetPasswordToken = undefined;
+    user.resetPasswordExpires = undefined;
+    await user.save();
+
+    res.json({
+      code: 200,
+      message: 'Password has been reset successfully'
+    });
+  } catch (error) {
+    console.error('Reset password error:', error);
+    res.status(500).json({
+      code: 500,
+      reason: 'Error resetting password'
+    });
+  }
+});
+
 
 module.exports = router;
