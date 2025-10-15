@@ -8,7 +8,7 @@ const mailerSend = new MailerSend({
 
 export async function sendEmail(obj) {
   try {
-    const sentFrom = new Sender("noreply@manapnl.com", "ManapnL");
+    const sentFrom = new Sender("noreply@EJOIN.com", "EJOIN");
 
     const recipients = [
       new Recipient(obj.to, "Your Client")
@@ -31,7 +31,7 @@ export async function sendEmail(obj) {
 }
 
 export async function sendPasswordEmail(email, resetLink) {
-  const subject = "Reset Your Password - ManapnL";
+  const subject = "Reset Your Password - EJOIN";
   
   const html = `
     <!DOCTYPE html>
@@ -39,7 +39,7 @@ export async function sendPasswordEmail(email, resetLink) {
     <head>
       <meta charset="UTF-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>Password Reset - ManapnL</title>
+      <title>Password Reset - EJOIN</title>
     </head>
     <body style="margin: 0; padding: 0; background-color: #f8fafc; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;">
       <div style="max-width: 600px; margin: 0 auto; background-color: #ffffff; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
@@ -57,7 +57,7 @@ export async function sendPasswordEmail(email, resetLink) {
           </p>
           
           <p style="color: #4a5568; font-size: 16px; line-height: 1.6; margin: 0 0 30px 0;">
-            We received a request to reset your password for your ManapnL account. Click the button below to create a new password:
+            We received a request to reset your password for your EJOIN account. Click the button below to create a new password:
           </p>
 
           <!-- CTA Button -->
@@ -91,7 +91,7 @@ export async function sendPasswordEmail(email, resetLink) {
 
           <p style="color: #4a5568; font-size: 16px; line-height: 1.6; margin: 30px 0 0 0;">
             Best regards,<br/>
-            <span style="color: #667eea; font-weight: 600;">The ManapnL Team</span>
+            <span style="color: #667eea; font-weight: 600;">The EJOIN Team</span>
           </p>
         </div>
 
@@ -99,10 +99,10 @@ export async function sendPasswordEmail(email, resetLink) {
         <div style="background-color: #f8fafc; padding: 30px; border-top: 1px solid #e2e8f0;">
           <p style="color: #a0aec0; font-size: 12px; line-height: 1.5; margin: 0; text-align: center;">
             This email was sent to <span style="color: #4a5568; font-weight: 500;">${email}</span><br/>
-            You're receiving this because you have an account with ManapnL.
+            You're receiving this because you have an account with EJOIN.
           </p>
           <p style="color: #a0aec0; font-size: 12px; line-height: 1.5; margin: 15px 0 0 0; text-align: center;">
-            ManapnL Inc. • 123 Business Street • City, Country
+            EJOIN Inc. • 123 Business Street • City, Country
           </p>
         </div>
       </div>
@@ -111,11 +111,11 @@ export async function sendPasswordEmail(email, resetLink) {
   `;
 
   const text = `
-ManapnL Password Reset
+EJOIN Password Reset
 
 Hello there!
 
-We received a request to reset your password for your ManapnL account. 
+We received a request to reset your password for your EJOIN account. 
 
 Reset your password using this link:
 ${resetLink}
@@ -125,12 +125,12 @@ This link will expire in 24 hours for security reasons.
 SECURITY NOTICE: If you didn't request this password reset, you can safely ignore this email. Your account remains secure.
 
 Best regards,
-The ManapnL Team
+The EJOIN Team
 
 ---
 This email was sent to ${email}
-You're receiving this because you have an account with ManapnL.
-ManapnL Inc. • 123 Business Street • City, Country
+You're receiving this because you have an account with EJOIN.
+EJOIN Inc. • 123 Business Street • City, Country
   `;
 
   await sendEmail({
