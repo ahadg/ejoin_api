@@ -651,6 +651,7 @@ class CampaignService {
 
     if (updates.sentMessages) {
       updateData.$inc.sentMessagesToday = updates.sentMessages;
+      updateData.$inc.deliveredMessages = updates.sentMessages;
     }
 
     // Also increment sentCount for progress tracking if sentMessages present
