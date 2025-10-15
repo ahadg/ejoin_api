@@ -184,7 +184,7 @@ class AIGenerationController {
       unsubscribeText,
       customInstructions
     } = params;
-
+    console.log("generateWithGrok_params",params)
     // Construct the system prompt for Grok
     const systemPrompt = this.buildSystemPrompt({
       variantCount,

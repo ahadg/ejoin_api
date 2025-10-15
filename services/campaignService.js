@@ -7,9 +7,7 @@ const Device = require('../models/Device');
 const redis = require('../config/redis');
 const DeviceClient = require('./deviceClient');
 const aiGenerationController = require('../controllers/aiGenerationController');
-const messageTrackingService = require('./messageTrackingService'); // Import the service
-
-
+const messageTrackingService = require('./messageTrackingService');
 
 class CampaignService {
   constructor() {
@@ -22,9 +20,6 @@ class CampaignService {
   init() {
     // Cleanup on startup
     this.cleanupStuckJobs();
-
-    // Start daily reset scheduler (kept for safety; you also have a cron job)
-    //this.startDailyResetScheduler();
   }
 
   // Create campaign queue and worker (one queue per campaign)
@@ -102,18 +97,52 @@ class CampaignService {
       // Emit to user-specific room
       io.to(`user:${campaign.user._id}`).emit("campaign-update", updateData);
       
-      // Also emit to campaign-specific room for more granular listening
-      //io.to(`campaign:${campaignId}`).emit("campaign-progress", updateData);
-
       console.log(`Progress emitted for campaign ${campaignId}: ${progress}%`);
     } catch (error) {
       console.error(`Error emitting campaign progress for ${campaignId}:`, error);
     }
   }
 
+  // Track message with comprehensive details
+  async trackMessageEvent(campaignId, contact, messageData, status, response = null, error = null, processingTime = null) {
+    try {
+      const campaign = await Campaign.findById(campaignId)
+        .populate('user')
+        .populate('device');
+
+      if (!campaign) {
+        console.error(`Campaign not found for tracking message: ${campaignId}`);
+        return;
+      }
+
+      const trackingData = {
+        campaignId: campaignId,
+        contactId: contact._id,
+        phoneNumber: contact.phoneNumber,
+        content: messageData.content,
+        variantId: messageData.variantId,
+        tone: messageData.tone,
+        characterCount: messageData.characterCount,
+        deviceId: campaign.device._id,
+        deviceName: campaign.device.name,
+        taskId: `task-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+        status: status,
+        processingTime: processingTime,
+        response: response,
+        error: error,
+        userId: campaign.user._id
+      };
+
+      await this.messageTracking.trackMessage(trackingData);
+      console.log(`Message tracked for campaign ${campaignId}, contact ${contact.phoneNumber}, status: ${status}`);
+    } catch (trackingError) {
+      console.error(`Error tracking message for campaign ${campaignId}:`, trackingError);
+      // Don't throw here - we don't want message tracking failures to stop the campaign
+    }
+  }
+
   // New: process entire campaign job (the worker will call this)
   async processCampaignJob(job) {
-    // job.data: { campaignId }
     const { campaignId } = job.data;
     console.log(`Worker processing campaign ${campaignId}`);
 
@@ -122,6 +151,7 @@ class CampaignService {
       .populate('contactList')
       .populate('device')
       .populate('message')
+      .populate('user')
       .populate({
         path: 'message',
         populate: { path: 'variants', model: 'MessageVariant' }
@@ -154,7 +184,6 @@ class CampaignService {
     }
 
     // Determine resume index (use sentCount as offset)
-    // Ensure sentCount exists in campaign schema and is incremented by updateCampaignStats
     const startIndex = Number(campaign.sentCount || 0);
     if (startIndex >= contacts.length) {
       console.log(`Campaign ${campaignId} already finished (sentCount >= contacts)`);
@@ -168,6 +197,7 @@ class CampaignService {
     // iterate contacts sequentially starting from startIndex
     for (let i = startIndex; i < contacts.length; i++) {
       const contact = contacts[i];
+      const processingStartTime = Date.now();
 
       // Re-check campaign status (in case paused/stopped externally)
       const currentCampaign = await Campaign.findById(campaignId);
@@ -212,7 +242,7 @@ class CampaignService {
       // Generate message variant
       const finalMessage = await this.generateMessageVariant(campaignId, campaign.taskSettings || {}, contact);
 
-      // Prepare SMS task (same structure you had)
+      // Prepare SMS task
       const smsTask = {
         id: Number(`${Date.now()}${Math.floor(Math.random() * 1000)}`),
         from: "",
@@ -232,16 +262,40 @@ class CampaignService {
       };
 
       try {
+        // Track message as pending before sending
+        // await this.trackMessageEvent(
+        //   campaignId, 
+        //   contact, 
+        //   finalMessage, 
+        //   'pending', 
+        //   null, 
+        //   null, 
+        //   null
+        // );
+
         const client = new DeviceClient(freshDevice);
         const ejoinResponse = await client.sendSms(smsTask);
         console.log("sendSms_result", ejoinResponse);
 
+        const processingTime = Date.now() - processingStartTime;
+
         if (ejoinResponse?.[0]?.reason === "OK") {  
-          // update campaign stats and device counters
+          // Update campaign stats and device counters
           await this.updateCampaignStats(campaignId, { sentMessages: 1, lastSentAt: new Date() });
           await this.updateDeviceDailyCount(freshDevice._id);
 
-          // optionally persist lastSentContactIndex
+          // Track successful message
+          // await this.trackMessageEvent(
+          //   campaignId, 
+          //   contact, 
+          //   finalMessage, 
+          //   'sent', 
+          //   ejoinResponse, 
+          //   null, 
+          //   processingTime
+          // );
+
+          // Optionally persist lastSentContactIndex
           await Campaign.findByIdAndUpdate(campaignId, {
             $set: { lastSentContactId: contact._id, updatedAt: new Date() }
           });
@@ -249,17 +303,41 @@ class CampaignService {
           // Emit progress update after successful send
           await this.emitCampaignProgress(campaignId);
         } else {
-          // treat as failure (increment failedMessages)
+          // Handle failure response
           console.error(`SMS send responded with error for campaign ${campaignId}`, ejoinResponse);
           await this.updateCampaignStats(campaignId, { failedMessages: 1 });
+
+          // Track failed message
+          // await this.trackMessageEvent(
+          //   campaignId, 
+          //   contact, 
+          //   finalMessage, 
+          //   'failed', 
+          //   ejoinResponse, 
+          //   ejoinResponse?.[0]?.reason || 'Unknown error', 
+          //   processingTime
+          // );
+
           // Emit progress update even on failure to show failed count
           await this.emitCampaignProgress(campaignId);
-          // depending on strategy, you might continue or pause; we'll continue
         }
 
       } catch (err) {
+        const processingTime = Date.now() - processingStartTime;
         console.error(`Error sending SMS for campaign ${campaignId} to ${contact.phoneNumber}:`, err);
         await this.updateCampaignStats(campaignId, { failedMessages: 1 });
+
+        // Track errored message
+        // await this.trackMessageEvent(
+        //   campaignId, 
+        //   contact, 
+        //   finalMessage, 
+        //   'failed', 
+        //   null, 
+        //   err.message, 
+        //   processingTime
+        // );
+
         // Emit progress update on error
         await this.emitCampaignProgress(campaignId);
         // Optionally implement retry/backoff here; for now continue to next contact
@@ -343,20 +421,23 @@ class CampaignService {
     if (campaign?.taskSettings?.messageVariationType === 'ai_random' || 
         campaign?.taskSettings?.useAiGeneration) {
       
-      console.log("Generating AI variant for contact:", contact.phoneNumber);
+      console.log("current_campaign:", campaign);
+      console.log("current_campaign_message:", campaign?.message);
+      console.log("current_campaign_message:", campaign?.message?.settings);
+      console.log("current_campaign_message:", campaign?.message?.settings?.characterLimit);
       // Use the AI generation controller
       try {
         const aiResponse = await aiGenerationController.generateWithGrok({
-          prompt: campaign?.taskSettings?.aiPrompt || campaign?.messageContent,
+          prompt: campaign?.message?.originalPrompt || campaign?.message?.baseMessage,
           variantCount: 1,
-          characterLimit: 160,
-          tones: ['Professional', 'Friendly', 'Urgent'],
-          languages: ['English'],
-          creativityLevel: 0.8,
+          characterLimit:campaign?.message?.settings?.get("characterLimit"),
+          tones: campaign?.message?.settings?.get("tones"),
+          languages: campaign?.message?.settings?.get("languages"),
+          creativityLevel: campaign?.message?.settings?.get("creativityLevel"),
           includeEmojis: true,
-          companyName: campaign?.taskSettings?.companyName || 'Your company',
-          unsubscribeText: 'Reply STOP to unsubscribe',
-          customInstructions: ``
+          companyName: campaign?.message?.settings?.get("companyName") || 'Your company',
+          unsubscribeText: campaign?.message?.settings?.get("unsubscribeText"),
+          customInstructions: campaign?.message?.settings?.get("customInstructions")
         });
         console.log("aiResponse",aiResponse);
         console.log("aiResponse_content",aiResponse?.[0]?.content);
@@ -410,7 +491,7 @@ class CampaignService {
     };
   }
 
-  // Check daily message limits (kept but worker also checks device each iteration)
+  // Check daily message limits
   async checkDailyLimit(campaignId, deviceId) {
     const campaign = await Campaign.findById(campaignId);
     const device = await Device.findById(deviceId);
@@ -433,7 +514,7 @@ class CampaignService {
     return campaign.sentMessagesToday || 0;
   }
 
-  // Start campaign background processing (now adds single process-campaign job)
+  // Start campaign background processing
   async startCampaignProcessing(campaignId) {
     try {
       const campaign = await Campaign.findById(campaignId)
@@ -449,6 +530,7 @@ class CampaignService {
       // Create queue + worker for this campaign
       const queue = await this.createCampaignProcessor(campaignId);
       console.log("campaign_end");
+      
       // Add one job that the worker will process
       await queue.add('process-campaign', {
         campaignId
@@ -617,14 +699,6 @@ class CampaignService {
     console.log('Daily counts reset and campaigns resumed where applicable');
   }
 
-  // Start daily reset scheduler (fallback in case cron job isn't used)
-  // startDailyResetScheduler() {
-  //   // Run every day at midnight (server local time)
-  //   setInterval(() => {
-  //     this.resetDailyCounts().catch(err => console.error('resetDailyCounts error:', err));
-  //   }, 24 * 60 * 60 * 1000); // 24 hours
-  // }
-
   // Cleanup stuck jobs
   async cleanupStuckJobs() {
     try {
@@ -645,7 +719,7 @@ class CampaignService {
     }
   }
 
-  // Get campaign queue status (unchanged)
+  // Get campaign queue status
   async getCampaignQueueStatus(campaignId) {
     const queueName = `campaign-${campaignId}`;
     const queue = this.queues.get(queueName);

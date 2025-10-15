@@ -263,147 +263,147 @@ class MessageTrackingService {
   /**
    * Get campaign analytics with detailed metrics
    */
-  async getCampaignAnalytics(campaignId, period = '7d') {
-    try {
-      const startDate = new Date();
-      switch (period) {
-        case '1d':
-          startDate.setDate(startDate.getDate() - 1);
-          break;
-        case '7d':
-          startDate.setDate(startDate.getDate() - 7);
-          break;
-        case '30d':
-          startDate.setDate(startDate.getDate() - 30);
-          break;
-        default:
-          startDate.setDate(startDate.getDate() - 7);
-      }
+  // async getCampaignAnalytics(campaignId, period = '7d') {
+  //   try {
+  //     const startDate = new Date();
+  //     switch (period) {
+  //       case '1d':
+  //         startDate.setDate(startDate.getDate() - 1);
+  //         break;
+  //       case '7d':
+  //         startDate.setDate(startDate.getDate() - 7);
+  //         break;
+  //       case '30d':
+  //         startDate.setDate(startDate.getDate() - 30);
+  //         break;
+  //       default:
+  //         startDate.setDate(startDate.getDate() - 7);
+  //     }
 
-      const stats = await CampaignStats.find({
-        campaign: campaignId,
-        date: { $gte: startDate }
-      }).sort({ date: 1 });
+  //     const stats = await CampaignStats.find({
+  //       campaign: campaignId,
+  //       date: { $gte: startDate }
+  //     }).sort({ date: 1 });
 
-      const messageDetails = await MessageDetail.find({
-        campaign: campaignId,
-        createdAt: { $gte: startDate }
-      }).populate('device').populate('messageVariant');
+  //     const messageDetails = await MessageDetail.find({
+  //       campaign: campaignId,
+  //       createdAt: { $gte: startDate }
+  //     }).populate('device').populate('messageVariant');
 
-      const analytics = {
-        totalSent: 0,
-        totalDelivered: 0,
-        totalFailed: 0,
-        totalRead: 0,
-        deliveryRate: 0,
-        readRate: 0,
-        averageProcessingTime: 0,
-        averageDeliveryLatency: 0,
-        dailyBreakdown: [],
-        variantPerformance: {},
-        devicePerformance: {},
-        hourlyDistribution: Array(24).fill(0).map((_, i) => ({ hour: i, count: 0 }))
-      };
+  //     const analytics = {
+  //       totalSent: 0,
+  //       totalDelivered: 0,
+  //       totalFailed: 0,
+  //       totalRead: 0,
+  //       deliveryRate: 0,
+  //       readRate: 0,
+  //       averageProcessingTime: 0,
+  //       averageDeliveryLatency: 0,
+  //       dailyBreakdown: [],
+  //       variantPerformance: {},
+  //       devicePerformance: {},
+  //       hourlyDistribution: Array(24).fill(0).map((_, i) => ({ hour: i, count: 0 }))
+  //     };
 
-      let totalProcessingTime = 0;
-      let totalDeliveryLatency = 0;
-      let deliveredCount = 0;
-      const variantStats = {};
-      const deviceStats = {};
+  //     let totalProcessingTime = 0;
+  //     let totalDeliveryLatency = 0;
+  //     let deliveredCount = 0;
+  //     const variantStats = {};
+  //     const deviceStats = {};
 
-      // Process stats
-      stats.forEach(stat => {
-        analytics.totalSent += stat.sentMessages || 0;
-        analytics.totalDelivered += stat.deliveredMessages || 0;
-        analytics.totalFailed += stat.failedMessages || 0;
-        analytics.totalRead += stat.readMessages || 0;
+  //     // Process stats
+  //     stats.forEach(stat => {
+  //       analytics.totalSent += stat.sentMessages || 0;
+  //       analytics.totalDelivered += stat.deliveredMessages || 0;
+  //       analytics.totalFailed += stat.failedMessages || 0;
+  //       analytics.totalRead += stat.readMessages || 0;
 
-        analytics.dailyBreakdown.push({
-          date: stat.date,
-          sent: stat.sentMessages || 0,
-          delivered: stat.deliveredMessages || 0,
-          failed: stat.failedMessages || 0,
-          read: stat.readMessages || 0,
-          deliveryRate: stat.sentMessages > 0 ? 
-            ((stat.deliveredMessages || 0) / stat.sentMessages * 100) : 0
-        });
-      });
+  //       analytics.dailyBreakdown.push({
+  //         date: stat.date,
+  //         sent: stat.sentMessages || 0,
+  //         delivered: stat.deliveredMessages || 0,
+  //         failed: stat.failedMessages || 0,
+  //         read: stat.readMessages || 0,
+  //         deliveryRate: stat.sentMessages > 0 ? 
+  //           ((stat.deliveredMessages || 0) / stat.sentMessages * 100) : 0
+  //       });
+  //     });
 
-      // Process message details for detailed analytics
-      messageDetails.forEach(msg => {
-        // Processing time
-        if (msg.processingTime) {
-          totalProcessingTime += msg.processingTime;
-        }
+  //     // Process message details for detailed analytics
+  //     messageDetails.forEach(msg => {
+  //       // Processing time
+  //       if (msg.processingTime) {
+  //         totalProcessingTime += msg.processingTime;
+  //       }
 
-        // Delivery latency
-        if (msg.deliveryLatency) {
-          totalDeliveryLatency += msg.deliveryLatency;
-          deliveredCount++;
-        }
+  //       // Delivery latency
+  //       if (msg.deliveryLatency) {
+  //         totalDeliveryLatency += msg.deliveryLatency;
+  //         deliveredCount++;
+  //       }
 
-        // Variant performance
-        if (msg.messageVariant) {
-          const variantId = msg.messageVariant._id.toString();
-          if (!variantStats[variantId]) {
-            variantStats[variantId] = { 
-              sent: 0, 
-              delivered: 0, 
-              failed: 0,
-              variant: msg.messageVariant
-            };
-          }
-          variantStats[variantId].sent++;
-          if (msg.status === 'delivered') variantStats[variantId].delivered++;
-          if (msg.status === 'failed') variantStats[variantId].failed++;
-        }
+  //       // Variant performance
+  //       if (msg.messageVariant) {
+  //         const variantId = msg.messageVariant._id.toString();
+  //         if (!variantStats[variantId]) {
+  //           variantStats[variantId] = { 
+  //             sent: 0, 
+  //             delivered: 0, 
+  //             failed: 0,
+  //             variant: msg.messageVariant
+  //           };
+  //         }
+  //         variantStats[variantId].sent++;
+  //         if (msg.status === 'delivered') variantStats[variantId].delivered++;
+  //         if (msg.status === 'failed') variantStats[variantId].failed++;
+  //       }
 
-        // Device performance
-        if (msg.device) {
-          const deviceId = msg.device._id.toString();
-          if (!deviceStats[deviceId]) {
-            deviceStats[deviceId] = { 
-              sent: 0, 
-              delivered: 0, 
-              failed: 0,
-              device: msg.device
-            };
-          }
-          deviceStats[deviceId].sent++;
-          if (msg.status === 'delivered') deviceStats[deviceId].delivered++;
-          if (msg.status === 'failed') deviceStats[deviceId].failed++;
-        }
+  //       // Device performance
+  //       if (msg.device) {
+  //         const deviceId = msg.device._id.toString();
+  //         if (!deviceStats[deviceId]) {
+  //           deviceStats[deviceId] = { 
+  //             sent: 0, 
+  //             delivered: 0, 
+  //             failed: 0,
+  //             device: msg.device
+  //           };
+  //         }
+  //         deviceStats[deviceId].sent++;
+  //         if (msg.status === 'delivered') deviceStats[deviceId].delivered++;
+  //         if (msg.status === 'failed') deviceStats[deviceId].failed++;
+  //       }
 
-        // Hourly distribution
-        if (msg.sentAt) {
-          const hour = new Date(msg.sentAt).getHours();
-          analytics.hourlyDistribution[hour].count++;
-        }
-      });
+  //       // Hourly distribution
+  //       if (msg.sentAt) {
+  //         const hour = new Date(msg.sentAt).getHours();
+  //         analytics.hourlyDistribution[hour].count++;
+  //       }
+  //     });
 
-      // Calculate rates
-      analytics.deliveryRate = analytics.totalSent > 0 ? 
-        (analytics.totalDelivered / analytics.totalSent * 100) : 0;
-      analytics.readRate = analytics.totalDelivered > 0 ? 
-        (analytics.totalRead / analytics.totalDelivered * 100) : 0;
+  //     // Calculate rates
+  //     analytics.deliveryRate = analytics.totalSent > 0 ? 
+  //       (analytics.totalDelivered / analytics.totalSent * 100) : 0;
+  //     analytics.readRate = analytics.totalDelivered > 0 ? 
+  //       (analytics.totalRead / analytics.totalDelivered * 100) : 0;
 
-      // Calculate averages
-      analytics.averageProcessingTime = messageDetails.length > 0 ? 
-        (totalProcessingTime / messageDetails.length) : 0;
-      analytics.averageDeliveryLatency = deliveredCount > 0 ? 
-        (totalDeliveryLatency / deliveredCount) : 0;
+  //     // Calculate averages
+  //     analytics.averageProcessingTime = messageDetails.length > 0 ? 
+  //       (totalProcessingTime / messageDetails.length) : 0;
+  //     analytics.averageDeliveryLatency = deliveredCount > 0 ? 
+  //       (totalDeliveryLatency / deliveredCount) : 0;
 
-      // Format performance data
-      analytics.variantPerformance = variantStats;
-      analytics.devicePerformance = deviceStats;
+  //     // Format performance data
+  //     analytics.variantPerformance = variantStats;
+  //     analytics.devicePerformance = deviceStats;
 
-      return analytics;
+  //     return analytics;
 
-    } catch (error) {
-      console.error('Error getting campaign analytics:', error);
-      throw error;
-    }
-  }
+  //   } catch (error) {
+  //     console.error('Error getting campaign analytics:', error);
+  //     throw error;
+  //   }
+  // }
 
   /**
    * Bulk update message statuses

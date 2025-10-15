@@ -90,7 +90,7 @@ const messageDetailSchema = new mongoose.Schema({
   }],
   
   // Technical Details
-  taskId: { type: Number },
+  taskId: { type: String },
   processingTime: { type: Number }, // in milliseconds
   retryCount: { type: Number, default: 0 },
   maxRetries: { type: Number, default: 3 },
