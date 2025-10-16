@@ -106,13 +106,42 @@ exports.updateContact = async (req, res) => {
   }
 };
 
-// Delete contact
 exports.deleteContact = async (req, res) => {
   try {
+    // 🔹 Delete contact for the current user
     const contact = await Contact.findOneAndDelete({ _id: req.params.id, user: req.user._id });
-    if (!contact) return res.status(404).json({ code: 404, reason: 'Contact not found' });
+    if (!contact) {
+      return res.status(404).json({ code: 404, reason: 'Contact not found' });
+    }
 
-    res.json({ code: 200, message: 'Contact deleted successfully' });
+    // 🔹 Ensure contact list exists and belongs to same user
+    const contactList = await ContactList.findOne({ _id: contact.contactList, user: req.user._id });
+    if (contactList) {
+      // 🔹 Recount contacts in this list
+      const [counts] = await Contact.aggregate([
+        { $match: { contactList: contactList._id } },
+        {
+          $group: {
+            _id: null,
+            totalContacts: { $sum: 1 },
+            optedInCount: { $sum: { $cond: ['$optedIn', 1, 0] } },
+            optedOutCount: { $sum: { $cond: ['$optedIn', 0, 1] } }
+          }
+        }
+      ]);
+
+      // 🔹 Update list stats (set to 0 if empty)
+      await ContactList.findByIdAndUpdate(contactList._id, {
+        totalContacts: counts?.totalContacts || 0,
+        optedInCount: counts?.optedInCount || 0,
+        optedOutCount: counts?.optedOutCount || 0,
+      });
+    }
+
+    res.json({
+      code: 200,
+      message: 'Contact deleted successfully',
+    });
   } catch (error) {
     console.error('Delete contact error:', error);
     res.status(500).json({ code: 500, reason: 'Error deleting contact' });

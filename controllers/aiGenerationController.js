@@ -182,10 +182,16 @@ class AIGenerationController {
       includeEmojis,
       companyName,
       unsubscribeText,
-      customInstructions
+      customInstructions,
+      previousMessages = [] // Keep for context
     } = params;
-    console.log("generateWithGrok_params",params)
-    // Construct the system prompt for Grok
+    
+    console.log("generateWithGrok_params", {
+      ...params,
+      previousMessagesCount: previousMessages.length
+    });
+  
+    // Construct the system prompt for Grok with previous messages as context only
     const systemPrompt = this.buildSystemPrompt({
       variantCount,
       characterLimit,
@@ -195,12 +201,13 @@ class AIGenerationController {
       includeEmojis,
       companyName,
       unsubscribeText,
-      customInstructions
+      customInstructions,
+      previousMessages // Pass to system prompt builder as context
     });
-
-    // Prepare the request to Grok API
+  
+    // Prepare the request to Grok API (use original temperature)
     const requestData = {
-        model: "grok-3",
+      model: "grok-3",
       messages: [
         {
           role: "system",
@@ -211,11 +218,11 @@ class AIGenerationController {
           content: prompt
         }
       ],
-      temperature: creativityLevel,
+      temperature: creativityLevel, // Use original creativity level
       max_tokens: 2000,
       n: 1
     };
-
+  
     try {
       const response = await axios.post(this.grokApiUrl, requestData, {
         headers: {
@@ -223,8 +230,9 @@ class AIGenerationController {
           'Content-Type': 'application/json'
         }
       });
-      console.log("grok_response",response.data);
-
+      
+      console.log("grok_response", response.data);
+  
       const aiResponse = response.data.choices[0].message.content;
       
       // Parse the AI response to extract variants
@@ -232,7 +240,7 @@ class AIGenerationController {
         characterLimit,
         includeEmojis
       });
-
+  
     } catch (error) {
       console.error('Grok API error:', error.response?.data || error.message);
       throw new Error('Failed to generate variants with AI: ' + (error.response?.data?.error?.message || error.message));
@@ -250,43 +258,61 @@ class AIGenerationController {
       includeEmojis,
       companyName,
       unsubscribeText,
-      customInstructions
+      customInstructions,
+      previousMessages = [] // Keep previous messages but don't enforce uniqueness
     } = params;
-
-    return `You are an expert SMS copywriter. Generate ${variantCount} compelling SMS message variants based on the user's prompt.
-
-REQUIREMENTS:
-- Character limit: ${characterLimit} characters MAXIMUM
-- Company name: ${companyName}
-- Unsubscribe text: "${unsubscribeText}" (include this in every variant)
-- Tones to use: ${tones.join(', ')}
-- Languages: ${languages.join(', ')}
-- Creativity level: ${creativityLevel}/1.0
-- Emojis: ${includeEmojis ? 'Include relevant emojis where appropriate' : 'Do not use emojis'}
-${customInstructions ? `- Custom instructions: ${customInstructions}` : ''}
-
-OUTPUT FORMAT: Return ONLY a JSON array where each object has:
-{
-  "content": "The actual SMS message text",
-  "tone": "One of the specified tones",
-  "language": "One of the specified languages",
-  "characterCount": number,
-  "spamScore": number between 0-5 (0=not spammy, 5=very spammy),
-  "encoding": "GSM-7" or "UCS-2",
-  "cost": number of SMS segments (1 or 2)
-}
-
-RULES:
-1. Every message MUST include the unsubscribe text
-2. Strictly respect the ${characterLimit} character limit
-3. Calculate character count accurately
-4. Assign appropriate spam scores based on common spam triggers
-5. Use UCS-2 encoding if message contains emojis or non-GSM characters, otherwise GSM-7
-6. Calculate cost: 1 segment for GSM-7 up to 160 chars, 2 segments beyond; 1 segment for UCS-2 up to 70 chars, 2 segments beyond
-7. Ensure tone matches the assigned tone category
-8. Make messages compelling and action-oriented
-
-Return ONLY the JSON array, no other text.`;
+  
+    let systemPrompt = `You are an expert SMS copywriter. Generate ${variantCount} compelling SMS message variants based on the user's prompt.
+  
+  REQUIREMENTS:
+  - Character limit: ${characterLimit} characters MAXIMUM
+  - Company name: ${companyName}
+  - Unsubscribe text: "${unsubscribeText}" (include this in every variant)
+  - Tones to use: ${tones.join(', ')}
+  - Languages: ${languages.join(', ')}
+  - Creativity level: ${creativityLevel}/1.0
+  - Emojis: ${includeEmojis ? 'Include relevant emojis where appropriate' : 'Do not use emojis'}
+  ${customInstructions ? `- Custom instructions: ${customInstructions}` : ''}`;
+  
+    // Add previous messages as reference context only (no strict uniqueness)
+    if (previousMessages && previousMessages.length > 0) {
+      systemPrompt += `
+  
+  PREVIOUS MESSAGES SENT IN THIS CAMPAIGN (for reference only):
+  ${previousMessages.map((msg, index) => `${index + 1}. "${msg}"`).join('\n')}
+  
+  CONTEXT GUIDANCE:
+  - Use the previous messages as inspiration for maintaining campaign consistency
+  - Feel free to create variations while keeping the core message intact
+  - Focus on creating effective messaging rather than strict uniqueness`;
+    }
+  
+    systemPrompt += `
+  
+  OUTPUT FORMAT: Return ONLY a JSON array where each object has:
+  {
+    "content": "The actual SMS message text",
+    "tone": "One of the specified tones",
+    "language": "One of the specified languages",
+    "characterCount": number,
+    "spamScore": number between 0-5 (0=not spammy, 5=very spammy),
+    "encoding": "GSM-7" or "UCS-2",
+    "cost": number of SMS segments (1 or 2)
+  }
+  
+  RULES:
+  1. Every message MUST include the unsubscribe text
+  2. Strictly respect the ${characterLimit} character limit
+  3. Calculate character count accurately
+  4. Assign appropriate spam scores based on common spam triggers
+  5. Use UCS-2 encoding if message contains emojis or non-GSM characters, otherwise GSM-7
+  6. Calculate cost: 1 segment for GSM-7 up to 160 chars, 2 segments beyond; 1 segment for UCS-2 up to 70 chars, 2 segments beyond
+  7. Ensure tone matches the assigned tone category
+  8. Make messages compelling and action-oriented
+  
+  Return ONLY the JSON array, no other text.`;
+  
+    return systemPrompt;
   };
 
   // Parse AI response and extract variants

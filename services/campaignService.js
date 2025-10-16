@@ -8,6 +8,7 @@ const redis = require('../config/redis');
 const DeviceClient = require('./deviceClient');
 const aiGenerationController = require('../controllers/aiGenerationController');
 const messageTrackingService = require('./messageTrackingService');
+const MessageSentDetails = require('../models/MessageSentDetails');
 
 class CampaignService {
   constructor() {
@@ -303,16 +304,6 @@ class CampaignService {
       };
 
       try {
-        // Track message as pending before sending
-        // await this.trackMessageEvent(
-        //   campaignId, 
-        //   contact, 
-        //   finalMessage, 
-        //   'pending', 
-        //   null, 
-        //   null, 
-        //   null
-        // );
 
         const client = new DeviceClient(freshDevice);
         const ejoinResponse = await client.sendSms([smsTask]);
@@ -450,7 +441,6 @@ class CampaignService {
         };
       } else {
         console.log("No variants found, falling back to base message");
-        // Fallback to base message if no variants exist
         return {
           content: campaign?.messageContent || 'Default message',
           variantId: 'fallback-base-message',
@@ -460,30 +450,37 @@ class CampaignService {
       }
     }
   
-    // Handle ai_random type - generate AI variant
+    // Handle ai_random type - generate AI variant (without uniqueness check)
     if (campaign?.taskSettings?.messageVariationType === 'ai_random' || 
         campaign?.taskSettings?.useAiGeneration) {
       
       console.log("current_campaign:", campaign);
       console.log("current_campaign_message:", campaign?.message);
-      console.log("current_campaign_message:", campaign?.message?.settings);
-      console.log("current_campaign_message:", campaign?.message?.settings?.characterLimit);
-      // Use the AI generation controller
+      console.log("current_campaign_message_settings:", campaign?.message?.settings);
+      console.log("current_campaign_message_characterLimit:", campaign?.message?.settings?.characterLimit);
+  
+      // Get previous messages to guide AI generation (but no uniqueness enforcement)
+      const previousMessages = await this.getPreviousCampaignMessages(campaignId);
+      console.log(`Found ${previousMessages.length} previous messages for context`);
+  
+      // Use the AI generation controller with previous messages as context only
       try {
         const aiResponse = await aiGenerationController.generateWithGrok({
           prompt: campaign?.message?.originalPrompt || campaign?.message?.baseMessage,
           variantCount: 1,
-          characterLimit:campaign?.message?.settings?.get("characterLimit"),
+          characterLimit: campaign?.message?.settings?.get("characterLimit"),
           tones: campaign?.message?.settings?.get("tones"),
           languages: campaign?.message?.settings?.get("languages"),
           creativityLevel: campaign?.message?.settings?.get("creativityLevel"),
           includeEmojis: campaign?.message?.settings?.get("includeEmojis"),
           companyName: campaign?.message?.settings?.get("companyName") || 'Your company',
           unsubscribeText: campaign?.message?.settings?.get("unsubscribeText"),
-          customInstructions: campaign?.message?.settings?.get("customInstructions")
+          customInstructions: campaign?.message?.settings?.get("customInstructions"),
+          previousMessages: previousMessages // Pass previous messages for context only
         });
-        console.log("aiResponse",aiResponse);
-        console.log("aiResponse_content",aiResponse?.[0]?.content);
+        
+        console.log("aiResponse", aiResponse);
+        console.log("aiResponse_content", aiResponse?.[0]?.content);
   
         if (aiResponse && aiResponse[0]?.content) {
           const variant = aiResponse?.[0];
@@ -532,7 +529,8 @@ class CampaignService {
       tone: 'Professional',
       characterCount: (campaign?.messageContent || 'Default message').length
     };
-  }
+  }  
+  
 
   // Check daily message limits
   async checkDailyLimit(campaignId, deviceId) {
@@ -732,6 +730,24 @@ class CampaignService {
     }
 
     await Campaign.findByIdAndUpdate(campaignId, updateData);
+  }
+
+  async getPreviousCampaignMessages(campaignId, limit = 50) {
+    try {
+      const previousMessages = await MessageSentDetails.find({
+        campaign: campaignId,
+        status: { $in: ['sent', 'delivered'] }
+      })
+      .select('content -_id')
+      .sort({ createdAt: -1 })
+      .limit(limit)
+      .lean();
+  
+      return previousMessages.map(msg => msg.content);
+    } catch (error) {
+      console.error(`Error fetching previous messages for campaign ${campaignId}:`, error);
+      return [];
+    }
   }
 
   // Update device daily count
