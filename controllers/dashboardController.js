@@ -11,6 +11,8 @@ exports.getDashboardStats = async (req, res) => {
     const userId = req.user._id;
     const today = new Date();
     today.setUTCHours(0, 0, 0, 0);
+    today.setUTCHours(today.getUTCHours() - 7);
+
     const tomorrow = new Date(today);
     tomorrow.setDate(tomorrow.getDate() + 1);
     const yesterday = new Date(today);
@@ -117,8 +119,8 @@ exports.getDashboardStats = async (req, res) => {
         totalCampaigns,
         activeCampaigns,
         totalContacts,
-        averageProcessingTimeToday: parseFloat(avgProcessingTimeToday.toFixed(2)), 
-        averageProcessingTimeAllTime: parseFloat(avgProcessingTimeAllTime.toFixed(2)), 
+        // averageProcessingTimeToday: parseFloat(avgProcessingTimeToday.toFixed(2)), 
+        // averageProcessingTimeAllTime: parseFloat(avgProcessingTimeAllTime.toFixed(2)), 
         
         // Performance Metrics
         performance: {
@@ -126,7 +128,7 @@ exports.getDashboardStats = async (req, res) => {
           failureRate: `${failureRate}%`,
           averageSignal: Math.round(averageSignal),
           messageTrend: parseFloat(messageTrend),
-          avgProcessingTime: parseFloat(avgProcessingTimeToday.toFixed(2)) 
+          //avgProcessingTime: parseFloat(avgProcessingTimeToday.toFixed(2)) 
         },
         
         // Device Health

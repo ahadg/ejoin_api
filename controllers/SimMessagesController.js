@@ -467,7 +467,7 @@ exports.webhookSMS = async (req, res) => {
         contact = await findOrCreateContact(from, device.user ? device.user.toString() : null);
       }
 
-      // 🔹 Decode SMS (reports may not have sms)
+      // 🔹 Decode SMS
       let decodedSMS = null;
       if (sms) {
         try {
@@ -477,13 +477,14 @@ exports.webhookSMS = async (req, res) => {
         }
       }
 
-      // 🔹 Check if user is online (moved this up to use in both cases)
+      // 🔹 Check if user is online
       const userRooms = io.sockets.adapter.rooms.get(`user:${device.user}`);
       const isUserOnline = userRooms && userRooms.size > 0;
 
-      // 🔹 Handle Delivery Reports
+      // ==========================================================
+      // 🔸 Handle Delivery Reports
+      // ==========================================================
       if (is_report) {
-        // Update the original message status to mark it as reported
         await SimMessages.findOneAndUpdate(
           { 
             to: from, // In reports, 'from' is the original recipient
@@ -501,7 +502,6 @@ exports.webhookSMS = async (req, res) => {
           }
         );
       
-        // 🔹 Save the report as a regular message in database (so it appears in conversations)
         const reportMessage = await SimMessages.create({
           sim: sim._id,
           contact: contact ? contact._id : undefined,
@@ -518,13 +518,11 @@ exports.webhookSMS = async (req, res) => {
           isSpamReport: true
         });
         
-        // 🔹 Re-fetch with populate
         const populatedReport = await SimMessages.findById(reportMessage._id)
           .populate("sim")
           .populate("contact");
 
         if (isUserOnline) {
-          // User is online - emit real-time report as message
           io.to(`user:${device.user}`).emit("sms-received", {
             ...populatedReport.toObject(),
             id: populatedReport._id.toString()
@@ -534,29 +532,27 @@ exports.webhookSMS = async (req, res) => {
             from: from,
             type: 'spam_report'
           });
-        } 
-        //else {
-          // User is offline - create notification for spam report
-          const notificationData = {
-            user: device.user,
-            title: 'Spam Report Received',
-            message: `Your number was reported as spam by ${from}`,
-            type: 'warning',
-            data: {
-              messageId: populatedReport._id.toString(),
-              phoneNumber: from,
-              port,
-              slot,
-              timestamp: new Date(ts * 1000),
-              isSpamReport: true
-            }
-          };
+        }
+
+        const notificationData = {
+          user: device.user,
+          title: 'Spam Report Received',
+          message: `Your number was reported as spam by ${from}`,
+          type: 'warning',
+          data: {
+            messageId: populatedReport._id.toString(),
+            phoneNumber: from,
+            port,
+            slot,
+            timestamp: new Date(ts * 1000),
+            isSpamReport: true
+          }
+        };
       
-          await createAndEmitNotification(io, notificationData);
-          console.log(`User offline, spam report notification created for user:${device.user}`);
-        //}
-      
-        // Update contact to mark as reported/spam
+        await createAndEmitNotification(io, notificationData);
+        console.log(`User offline, spam report notification created for user:${device.user}`);
+
+        // Update contact
         if (from) {
           await Contact.findOneAndUpdate(
             { phoneNumber: from },
@@ -571,10 +567,17 @@ exports.webhookSMS = async (req, res) => {
           );
         }
       
-        continue; // Skip the rest of the loop for this report
+        continue;
       }
 
-      // 🔹 Save regular incoming message
+      // ==========================================================
+      // 🔸 Handle Regular or STOP Messages
+      // ==========================================================
+
+      const lowerMsg = (decodedSMS || '').trim().toLowerCase();
+      const isStopMessage = ['stop', 'unsubscribe', 'cancel', 'quit'].includes(lowerMsg);
+
+      // 🔹 Save the message
       const savedMessage = await SimMessages.create({
         sim: sim._id,
         contact: contact ? contact._id : undefined,
@@ -583,49 +586,80 @@ exports.webhookSMS = async (req, res) => {
         from,
         to,
         read: false,
-        isReport: false,
+        isReport: isStopMessage,
         sms: decodedSMS,
         rawSms: sms || null,
         direction: 'inbound',
-        status: 'delivered'
+        status: isStopMessage ? 'unsubscribed' : 'delivered',
+        isSpamReport: isStopMessage
       });
       
       const populatedMessage = await SimMessages.findById(savedMessage._id)
         .populate("sim")
         .populate("contact");
-      
 
-      //if (isUserOnline) {
-        // User is online - emit real-time message to user room
-        io.to(`user:${device.user}`).emit("sms-received", {
-          ...populatedMessage.toObject(),
-          id: populatedMessage._id.toString()
-        });
-        
-        console.log(`Real-time SMS sent to user:${device.user}`, {
-          from: from,
-          message: decodedSMS ? decodedSMS.substring(0, 50) + '...' : 'No content'
-        });
-      //} else {
-        // User is offline - create notification
-        const notificationData = {
+      // 🔹 Handle STOP message
+      if (isStopMessage && from) {
+        await Contact.findOneAndUpdate(
+          { phoneNumber: from },
+          {
+            $set: {
+              isReport: true,
+              isSpam: true,
+              optedIn: false,
+              lastReported: new Date(ts * 1000)
+            }
+          },
+          { new: true }
+        );
+
+        const stopNotification = {
           user: device.user,
-          title: 'New SMS Received',
-          message: `From: ${from} - ${decodedSMS ? decodedSMS.substring(0, 50) + (decodedSMS.length > 50 ? '...' : '') : 'No content'}`,
-          type: 'info',
+          title: 'User Unsubscribed',
+          message: `Number ${from} sent “STOP” to unsubscribe.`,
+          type: 'warning',
           data: {
-            messageId: savedMessage._id.toString(),
             phoneNumber: from,
-            port,
-            slot,
+            messageId: savedMessage._id.toString(),
             timestamp: new Date(ts * 1000),
-            preview: decodedSMS ? decodedSMS.substring(0, 100) : ''
+            isSpamReport: true
           }
         };
 
-        await createAndEmitNotification(io, notificationData);
-        //console.log(`User offline, notification created for user:${device.user}`);
-      //}
+        await createAndEmitNotification(io, stopNotification);
+        console.log(`STOP detected: ${from} unsubscribed from ${to}`);
+      }
+
+      // 🔹 Emit message (for both STOP and normal)
+      io.to(`user:${device.user}`).emit("sms-received", {
+        ...populatedMessage.toObject(),
+        id: populatedMessage._id.toString()
+      });
+
+      console.log(`Real-time SMS sent to user:${device.user}`, {
+        from: from,
+        message: decodedSMS ? decodedSMS.substring(0, 50) + '...' : 'No content'
+      });
+
+      // 🔹 Also send notification
+      const notificationData = {
+        user: device.user,
+        title: isStopMessage ? 'Unsubscribe Message Received' : 'New SMS Received',
+        message: isStopMessage
+          ? `From: ${from} - Sent “STOP” to unsubscribe`
+          : `From: ${from} - ${decodedSMS ? decodedSMS.substring(0, 50) + (decodedSMS.length > 50 ? '...' : '') : 'No content'}`,
+        type: isStopMessage ? 'warning' : 'info',
+        data: {
+          messageId: savedMessage._id.toString(),
+          phoneNumber: from,
+          port,
+          slot,
+          timestamp: new Date(ts * 1000),
+          preview: decodedSMS ? decodedSMS.substring(0, 100) : ''
+        }
+      };
+
+      await createAndEmitNotification(io, notificationData);
     }
 
     res.status(201).json({ code: 201, success: true });

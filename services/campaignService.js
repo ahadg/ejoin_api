@@ -283,21 +283,22 @@ class CampaignService {
       const finalMessage = await this.generateMessageVariant(campaignId, campaign.taskSettings || {}, contact);
 
       // Prepare SMS task
-      const smsTask = {
+      const smsTask = 
+      {
         id: Number(`${Date.now()}${Math.floor(Math.random() * 1000)}`),
         from: "",
         sms: finalMessage.content,
-        interval_min: campaign.taskSettings?.interval_min || 30000,
-        interval_max: campaign.taskSettings?.interval_max || 50000,
+        interval_min: 0,
+        interval_max: 1000,
         timeout: campaign.taskSettings?.timeout || 30,
         charset: campaign.taskSettings?.charset?.toLowerCase() === 'utf-8' ? 'utf8' : 'utf8',
         coding: campaign.taskSettings?.coding || 0,
-        sms_type: campaign.taskSettings?.sms_type || 0,
+        //sms_type: campaign.taskSettings?.sms_type || 0,
         sdr: campaign.taskSettings?.sdr !== false,
         fdr: campaign.taskSettings?.fdr !== false,
         dr: campaign.taskSettings?.dr !== false,
         to_all: campaign.taskSettings?.to_all || true,
-        flash_sms: campaign.taskSettings?.flash_sms || false,
+        //flash_sms: campaign.taskSettings?.flash_sms || false,
         recipients: [contact.phoneNumber],
       };
 
@@ -314,7 +315,7 @@ class CampaignService {
         // );
 
         const client = new DeviceClient(freshDevice);
-        const ejoinResponse = await client.sendSms(smsTask);
+        const ejoinResponse = await client.sendSms([smsTask]);
         console.log("sendSms_result", ejoinResponse);
 
         const processingTime = Date.now() - processingStartTime;
@@ -383,6 +384,17 @@ class CampaignService {
         // Optionally implement retry/backoff here; for now continue to next contact
       }
 
+      // Completed campaign
+      await Campaign.findByIdAndUpdate(campaignId, {
+        status: 'completed',
+        completedAt: new Date()
+      });
+      
+      // Emit final progress update
+      await this.emitCampaignProgress(campaignId);
+      await this.emitCampaignStatusChange(campaignId, 'active', 'completed', 'campaign_finished');
+      
+
       // Delay between sends (interval). Worker will sleep here.
       const delay = this.getRandomDelay(
         campaign.taskSettings?.interval_min || 30000,
@@ -392,16 +404,6 @@ class CampaignService {
       await new Promise(resolve => setTimeout(resolve, delay));
     }
 
-    // Completed campaign
-    await Campaign.findByIdAndUpdate(campaignId, {
-      status: 'completed',
-      completedAt: new Date()
-    });
-    
-    // Emit final progress update
-    await this.emitCampaignProgress(campaignId);
-    await this.emitCampaignStatusChange(campaignId, 'active', 'completed', 'campaign_finished');
-    
     console.log(`Campaign ${campaignId} completed successfully`);
     return;
   }
@@ -475,7 +477,7 @@ class CampaignService {
           tones: campaign?.message?.settings?.get("tones"),
           languages: campaign?.message?.settings?.get("languages"),
           creativityLevel: campaign?.message?.settings?.get("creativityLevel"),
-          includeEmojis: true,
+          includeEmojis: campaign?.message?.settings?.get("includeEmojis"),
           companyName: campaign?.message?.settings?.get("companyName") || 'Your company',
           unsubscribeText: campaign?.message?.settings?.get("unsubscribeText"),
           customInstructions: campaign?.message?.settings?.get("customInstructions")

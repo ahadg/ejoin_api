@@ -19,7 +19,7 @@ const simMessagesSchema = new mongoose.Schema({
   },
   status: { 
     type: String, 
-    enum: ["sent", "delivered", "read", "replied", "failed"], 
+    //enum: ["sent", "delivered", "read", "replied", "failed"], 
     default: "sent" 
   }
 }, { timestamps: true });
