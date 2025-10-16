@@ -1,7 +1,7 @@
-// models/MessageDetail.js
+// models/MessageSentDetails.js
 const mongoose = require('mongoose');
 
-const messageDetailSchema = new mongoose.Schema({
+const messageSentdetailschema = new mongoose.Schema({
   // References
   campaign: { 
     type: mongoose.Schema.Types.ObjectId, 
@@ -125,15 +125,15 @@ const messageDetailSchema = new mongoose.Schema({
 });
 
 // Indexes for common queries
-messageDetailSchema.index({ campaign: 1, status: 1 });
-messageDetailSchema.index({ user: 1, createdAt: -1 });
-messageDetailSchema.index({ phoneNumber: 1, createdAt: -1 });
-messageDetailSchema.index({ createdAt: -1 });
-messageDetailSchema.index({ sentAt: -1 });
-messageDetailSchema.index({ 'statusHistory.timestamp': -1 });
+messageSentdetailschema.index({ campaign: 1, status: 1 });
+messageSentdetailschema.index({ user: 1, createdAt: -1 });
+messageSentdetailschema.index({ phoneNumber: 1, createdAt: -1 });
+messageSentdetailschema.index({ createdAt: -1 });
+messageSentdetailschema.index({ sentAt: -1 });
+messageSentdetailschema.index({ 'statusHistory.timestamp': -1 });
 
 // Pre-save middleware to generate content hash
-messageDetailSchema.pre('save', function(next) {
+messageSentdetailschema.pre('save', function(next) {
   if (this.isModified('content')) {
     const crypto = require('crypto');
     this.contentHash = crypto.createHash('md5').update(this.content).digest('hex');
@@ -142,7 +142,7 @@ messageDetailSchema.pre('save', function(next) {
 });
 
 // Method to update status with history
-messageDetailSchema.methods.updateStatus = function(newStatus, reason = '', data = null) {
+messageSentdetailschema.methods.updateStatus = function(newStatus, reason = '', data = null) {
   this.status = newStatus;
   this.statusHistory.push({
     status: newStatus,
@@ -175,7 +175,7 @@ messageDetailSchema.methods.updateStatus = function(newStatus, reason = '', data
 };
 
 // Static method for bulk status updates
-messageDetailSchema.statics.bulkUpdateStatus = async function(messageIds, newStatus, reason = '') {
+messageSentdetailschema.statics.bulkUpdateStatus = async function(messageIds, newStatus, reason = '') {
   const updates = messageIds.map(messageId => ({
     updateOne: {
       filter: { messageId },
@@ -195,4 +195,4 @@ messageDetailSchema.statics.bulkUpdateStatus = async function(messageIds, newSta
   return this.bulkWrite(updates);
 };
 
-module.exports = mongoose.model('MessageDetail', messageDetailSchema);
+module.exports = mongoose.model('MessageSentDetail', messageSentdetailschema);

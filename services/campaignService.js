@@ -88,18 +88,50 @@ class CampaignService {
           deliveredMessages: campaign.deliveredMessages || 0,
           failedMessages: campaign.failedMessages || 0,
           progress: progress,
-          status: campaign.sentCount >= campaign.totalContacts ? 'completed' : campaign.status,
+          status: campaign.status, // Use the actual campaign status
+          pauseReason: campaign.pauseReason, // Include pause reason if any
           averageProcessingTime: campaign.averageProcessingTime || 0,
           updatedAt: campaign.updatedAt,
+          // Include timestamps for better UI updates
+          processingStartedAt: campaign.processingStartedAt,
+          pausedAt: campaign.pausedAt,
+          resumedAt: campaign.resumedAt,
+          completedAt: campaign.completedAt,
         },
       };
 
       // Emit to user-specific room
       io.to(`user:${campaign.user._id}`).emit("campaign-update", updateData);
       
-      console.log(`Progress emitted for campaign ${campaignId}: ${progress}%`);
+      console.log(`Progress emitted for campaign ${campaignId}: ${progress}% (Status: ${campaign.status})`);
     } catch (error) {
       console.error(`Error emitting campaign progress for ${campaignId}:`, error);
+    }
+  }
+
+  // Emit campaign status change (for specific status updates)
+  async emitCampaignStatusChange(campaignId, oldStatus, newStatus, reason = null) {
+    try {
+      const { io } = require('../app');
+      const campaign = await Campaign.findById(campaignId).populate('user', '_id');
+      
+      if (!campaign || !campaign.user) return;
+
+      const statusData = {
+        campaignId: campaign._id,
+        campaignName: campaign.name,
+        statusUpdate: {
+          oldStatus,
+          newStatus,
+          reason,
+          timestamp: new Date().toISOString()
+        }
+      };
+
+      io.to(`user:${campaign.user._id}`).emit("campaign-status-change", statusData);
+      console.log(`Campaign status change emitted: ${campaignId} - ${oldStatus} → ${newStatus}`);
+    } catch (error) {
+      console.error(`Error emitting campaign status change for ${campaignId}:`, error);
     }
   }
 
@@ -160,6 +192,7 @@ class CampaignService {
     if (!campaign || !campaign.contactList) {
       console.error(`Campaign or contact list not found for ${campaignId}`);
       await Campaign.findByIdAndUpdate(campaignId, { status: 'failed' });
+      await this.emitCampaignProgress(campaignId);
       return;
     }
 
@@ -168,6 +201,7 @@ class CampaignService {
     if (!device) {
       console.error(`Device not found for campaign ${campaignId}`);
       await Campaign.findByIdAndUpdate(campaignId, { status: 'failed' });
+      await this.emitCampaignProgress(campaignId);
       return;
     }
 
@@ -180,6 +214,7 @@ class CampaignService {
     if (!contacts || contacts.length === 0) {
       console.log(`No opted-in contacts for campaign ${campaignId}`);
       await Campaign.findByIdAndUpdate(campaignId, { status: 'completed', completedAt: new Date() });
+      await this.emitCampaignProgress(campaignId);
       return;
     }
 
@@ -188,11 +223,13 @@ class CampaignService {
     if (startIndex >= contacts.length) {
       console.log(`Campaign ${campaignId} already finished (sentCount >= contacts)`);
       await Campaign.findByIdAndUpdate(campaignId, { status: 'completed', completedAt: new Date() });
+      await this.emitCampaignProgress(campaignId);
       return;
     }
 
     // Ensure campaign status
     await Campaign.findByIdAndUpdate(campaignId, { status: 'active', processingStartedAt: campaign.processingStartedAt || new Date() });
+    await this.emitCampaignProgress(campaignId);
 
     // iterate contacts sequentially starting from startIndex
     for (let i = startIndex; i < contacts.length; i++) {
@@ -203,14 +240,17 @@ class CampaignService {
       const currentCampaign = await Campaign.findById(campaignId);
       if (!currentCampaign) {
         console.log(`Campaign ${campaignId} removed; stopping worker.`);
+        await this.emitCampaignProgress(campaignId);
         return;
       }
       if (currentCampaign.status === 'paused' && currentCampaign.pauseReason !== 'resume_requested') {
         console.log(`Campaign ${campaignId} externally paused. Exiting worker.`);
+        await this.emitCampaignProgress(campaignId);
         return;
       }
       if (currentCampaign.status === 'completed') {
         console.log(`Campaign ${campaignId} marked completed. Exiting worker.`);
+        await this.emitCampaignProgress(campaignId);
         return;
       }
 
@@ -360,6 +400,7 @@ class CampaignService {
     
     // Emit final progress update
     await this.emitCampaignProgress(campaignId);
+    await this.emitCampaignStatusChange(campaignId, 'active', 'completed', 'campaign_finished');
     
     console.log(`Campaign ${campaignId} completed successfully`);
     return;
@@ -544,6 +585,10 @@ class CampaignService {
         processingStartedAt: new Date()
       });
 
+      // Emit start event via socket
+      await this.emitCampaignStatusChange(campaignId, 'draft', 'active', 'campaign_started');
+      await this.emitCampaignProgress(campaignId);
+
       console.log(`Queued campaign ${campaignId} for processing`);
       return { success: true };
     } catch (error) {
@@ -570,11 +615,20 @@ class CampaignService {
       }
     }
 
+    // Get current status before updating
+    const currentCampaign = await Campaign.findById(campaignId);
+    const oldStatus = currentCampaign?.status || 'active';
+
+    // Update campaign status
     await Campaign.findByIdAndUpdate(campaignId, {
       status: 'paused',
       pauseReason: reason,
       pausedAt: new Date()
     });
+
+    // Emit pause events via socket
+    await this.emitCampaignStatusChange(campaignId, oldStatus, 'paused', reason);
+    await this.emitCampaignProgress(campaignId);
 
     console.log(`Campaign ${campaignId} paused: ${reason}`);
   }
@@ -601,11 +655,16 @@ class CampaignService {
       jobId: `process-campaign-resume-${campaignId}-${Date.now()}`
     });
 
+    // Update campaign status
     await Campaign.findByIdAndUpdate(campaignId, {
       status: 'active',
       pauseReason: null,
       resumedAt: new Date()
     });
+
+    // Emit resume events via socket
+    await this.emitCampaignStatusChange(campaignId, 'paused', 'active', 'campaign_resumed');
+    await this.emitCampaignProgress(campaignId);
 
     console.log(`Campaign ${campaignId} resumed`);
   }
@@ -614,6 +673,10 @@ class CampaignService {
   async stopCampaign(campaignId) {
     const queueName = `campaign-${campaignId}`;
     const queue = this.queues.get(queueName);
+
+    // Get current status before updating
+    const currentCampaign = await Campaign.findById(campaignId);
+    const oldStatus = currentCampaign?.status || 'active';
 
     if (queue) {
       try {
@@ -633,11 +696,18 @@ class CampaignService {
       }
       this.workers.delete(queueName);
     }
+
     console.log("campaign_stopped");
+    
+    // Update campaign status
     await Campaign.findByIdAndUpdate(campaignId, {
-      status: 'paused',
+      status: 'stopped',
       completedAt: new Date()
     });
+
+    // Emit stop events via socket
+    await this.emitCampaignStatusChange(campaignId, oldStatus, 'stopped', 'manual_stop');
+    await this.emitCampaignProgress(campaignId);
 
     console.log(`Campaign ${campaignId} stopped`);
   }
@@ -752,6 +822,36 @@ class CampaignService {
       return { status: 'error', error: error.message };
     }
   }
+  // Restore campaign processors after server restart
+  async restoreActiveCampaigns() {
+    try {
+      console.log('Restoring active campaigns after restart...');
+      const activeCampaigns = await Campaign.find({
+        status: { $in: ['active', 'paused'] } // restore these
+      });
+
+      for (const campaign of activeCampaigns) {
+        console.log(`Restoring campaign queue for: ${campaign._id}`);
+        const queue = await this.createCampaignProcessor(campaign._id);
+
+        // Optionally re-add the job if not already in Redis
+        const jobs = await queue.getJobs(['waiting', 'active', 'delayed']);
+        const alreadyQueued = jobs.some(job => job.data.campaignId.toString() === campaign._id.toString());
+        
+        if (!alreadyQueued && campaign.status === 'active') {
+          console.log(`Re-adding process-campaign job for ${campaign._id}`);
+          await queue.add('process-campaign', { campaignId: campaign._id }, {
+            jobId: `process-campaign-${campaign._id}-${Date.now()}`
+          });  
+        }
+      }
+
+      console.log('✅ Active campaign restoration completed.');
+    } catch (err) {
+      console.error('Error restoring campaigns:', err);
+    }
+  }
+
 }
 
 module.exports = new CampaignService();

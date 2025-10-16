@@ -1,5 +1,5 @@
 // services/messageTrackingService.js
-const MessageDetail = require('../models/MessageDetail');
+const MessageSentDetails = require('../models/MessageSentDetails');
 const CampaignStats = require('../models/campaignStats');
 const Campaign = require('../models/Campaign');
 
@@ -29,6 +29,7 @@ class MessageTrackingService {
       } = messageData;
 
       // Get or create campaign stats for today
+      
       const today = new Date();
       today.setHours(0, 0, 0, 0);
 
@@ -49,7 +50,7 @@ class MessageTrackingService {
       const messageId = `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
       // Create message detail record
-      const messageDetail = await MessageDetail.create({
+      const MessageSDetails = await MessageSentDetails.create({
         campaign: campaignId,
         campaignStats: campaignStats._id,
         user: userId,
@@ -72,14 +73,14 @@ class MessageTrackingService {
       });
 
       // Update status with history
-      await messageDetail.updateStatus(status, 'initial_send');
-      await messageDetail.save();
+      await MessageSDetails.updateStatus(status, 'initial_send');
+      await MessageSDetails.save();
 
       // Update campaign stats counters
       await this.updateCampaignStatsCounters(campaignId, campaignStats._id, status);
 
       console.log(`Tracked message ${messageId} for campaign ${campaignId} with status: ${status}`);
-      return messageDetail;
+      return MessageSDetails;
 
     } catch (error) {
       console.error('Error tracking message:', error);
@@ -157,9 +158,9 @@ class MessageTrackingService {
   /**
    * Get message details by messageId
    */
-  async getMessageDetail(messageId) {
+  async getMessageSentDetails(messageId) {
     try {
-      return await MessageDetail.findOne({ messageId })
+      return await MessageSentDetails.findOne({ messageId })
         .populate('campaign', 'name status')
         .populate('contact', 'phoneNumber firstName lastName')
         .populate('device', 'name number')
@@ -205,7 +206,7 @@ class MessageTrackingService {
       const sort = { [sortBy]: sortOrder === 'desc' ? -1 : 1 };
 
       const [messages, total] = await Promise.all([
-        MessageDetail.find(query)
+        MessageSentDetails.find(query)
           .populate('contact', 'phoneNumber firstName lastName')
           .populate('device', 'name number')
           .populate('messageVariant', 'content tone')
@@ -213,7 +214,7 @@ class MessageTrackingService {
           .limit(limit)
           .skip(skip)
           .lean(),
-        MessageDetail.countDocuments(query)
+        MessageSentDetails.countDocuments(query)
       ]);
 
       return {
@@ -237,31 +238,31 @@ class MessageTrackingService {
    */
   async updateMessageStatus(messageId, newStatus, reason = '', deliveryData = null) {
     try {
-      const messageDetail = await MessageDetail.findOne({ messageId });
+      const MessageSDetails = await MessageSentDetails.findOne({ messageId });
       
-      if (!messageDetail) {
-        console.warn(`MessageDetail not found for messageId: ${messageId}`);
+      if (!MessageSDetails) {
+        console.warn(`MessageSDetails not found for messageId: ${messageId}`);
         return null;
       }
 
-      const oldStatus = messageDetail.status;
+      const oldStatus = MessageSDetails.status;
 
       // Update status with history
-      await messageDetail.updateStatus(newStatus, reason, deliveryData);
-      await messageDetail.save();
+      await MessageSDetails.updateStatus(newStatus, reason, deliveryData);
+      await MessageSDetails.save();
 
       // Update campaign stats counters
       const today = new Date();
       today.setHours(0, 0, 0, 0);
 
       const campaignStats = await CampaignStats.findOne({
-        campaign: messageDetail.campaign,
+        campaign: MessageSDetails.campaign,
         date: today
       });
 
       if (campaignStats) {
         await this.updateCampaignStatsCounters(
-          messageDetail.campaign, 
+          MessageSDetails.campaign, 
           campaignStats._id, 
           newStatus, 
           oldStatus
@@ -269,7 +270,7 @@ class MessageTrackingService {
       }
 
       console.log(`Updated message ${messageId} status from ${oldStatus} to ${newStatus}`);
-      return messageDetail;
+      return MessageSDetails;
 
     } catch (error) {
       console.error('Error updating message status:', error);
@@ -302,7 +303,7 @@ class MessageTrackingService {
   //       date: { $gte: startDate }
   //     }).sort({ date: 1 });
 
-  //     const messageDetails = await MessageDetail.find({
+  //     const messageSentdetails = await MessageSentDetails.find({
   //       campaign: campaignId,
   //       createdAt: { $gte: startDate }
   //     }).populate('device').populate('messageVariant');
@@ -347,7 +348,7 @@ class MessageTrackingService {
   //     });
 
   //     // Process message details for detailed analytics
-  //     messageDetails.forEach(msg => {
+  //     messageSentdetails.forEach(msg => {
   //       // Processing time
   //       if (msg.processingTime) {
   //         totalProcessingTime += msg.processingTime;
@@ -405,8 +406,8 @@ class MessageTrackingService {
   //       (analytics.totalRead / analytics.totalDelivered * 100) : 0;
 
   //     // Calculate averages
-  //     analytics.averageProcessingTime = messageDetails.length > 0 ? 
-  //       (totalProcessingTime / messageDetails.length) : 0;
+  //     analytics.averageProcessingTime = messageSentdetails.length > 0 ? 
+  //       (totalProcessingTime / messageSentdetails.length) : 0;
   //     analytics.averageDeliveryLatency = deliveredCount > 0 ? 
   //       (totalDeliveryLatency / deliveredCount) : 0;
 
@@ -427,7 +428,7 @@ class MessageTrackingService {
    */
   async bulkUpdateMessageStatus(messageIds, newStatus, reason = '') {
     try {
-      return await MessageDetail.bulkUpdateStatus(messageIds, newStatus, reason);
+      return await MessageSentDetails.bulkUpdateStatus(messageIds, newStatus, reason);
     } catch (error) {
       console.error('Error bulk updating message statuses:', error);
       throw error;
@@ -439,7 +440,7 @@ class MessageTrackingService {
    */
   async getMessagesByStatus(campaignId, status, limit = 100) {
     try {
-      return await MessageDetail.find({
+      return await MessageSentDetails.find({
         campaign: campaignId,
         status: status
       })

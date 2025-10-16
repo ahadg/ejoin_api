@@ -15,11 +15,13 @@ const contactRoutes = require('./routes/contacts');
 const deviceRoutes = require('./routes/devices');
 const { auth } = require('./middleware/auth');
 const messageRoutes = require('./routes/messages');
+const messageSentRoutes = require('./routes/messagesSent');
 const smsRoutes = require('./routes/sms');
 const commandsRoutes = require('./routes/Ejoin/commands');
 const simRoutes = require('./routes/sim');
 const dashboardRoutes = require('./routes/dashboard');
 const notificationRoutes = require('./routes/notifications');
+const CampaignService = require('./services/campaignService');
 
 // Import Redis configuration
 const redis = require('./config/redis');
@@ -190,6 +192,7 @@ app.use('/api/campaigns', campaignRoutes);
 app.use('/api/contacts', contactRoutes);
 app.use('/api/devices', deviceRoutes);
 app.use('/api/messages', messageRoutes);
+app.use('/api/sentmessages', messageSentRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/notifications', notificationRoutes);
 
@@ -257,6 +260,9 @@ const startServer = async () => {
       console.log(`📊 Health check available at: http://localhost:${port}/health`);
       console.log(`🔍 Redis health: http://localhost:${port}/health/redis`);
     });
+    setTimeout(async () => {
+      await CampaignService.restoreActiveCampaigns();
+    }, 5000);
   } catch (error) {
     console.error('💥 Failed to start server:', error);
     process.exit(1);

@@ -21,7 +21,7 @@ const simSchema = new mongoose.Schema({
   },
   portNumber: { 
     type: String, 
-    required: true 
+    //required: true 
   },
   port: { 
     type: Number, 

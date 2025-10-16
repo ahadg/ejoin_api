@@ -49,7 +49,7 @@ exports.syncDeviceSms = async (device) => {
   // call device API to fetch SMS (your device returns { smses: [] })
   const result = await client.getSms();
   const smses = result?.smses || [];
-  console.log("smses", smses.length);
+  console.log("smses", smses);
   for (const msg of smses) {
     const { port, slot, timestamp, from, to, is_report, sms } = msg;
 
