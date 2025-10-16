@@ -285,15 +285,15 @@ class CampaignService {
           await this.updateDeviceDailyCount(freshDevice._id);
 
           // Track successful message
-          // await this.trackMessageEvent(
-          //   campaignId, 
-          //   contact, 
-          //   finalMessage, 
-          //   'sent', 
-          //   ejoinResponse, 
-          //   null, 
-          //   processingTime
-          // );
+          await this.trackMessageEvent(
+            campaignId, 
+            contact, 
+            finalMessage, 
+            'sent', 
+            ejoinResponse, 
+            null, 
+            processingTime
+          );
 
           // Optionally persist lastSentContactIndex
           await Campaign.findByIdAndUpdate(campaignId, {
@@ -308,15 +308,15 @@ class CampaignService {
           await this.updateCampaignStats(campaignId, { failedMessages: 1 });
 
           // Track failed message
-          // await this.trackMessageEvent(
-          //   campaignId, 
-          //   contact, 
-          //   finalMessage, 
-          //   'failed', 
-          //   ejoinResponse, 
-          //   ejoinResponse?.[0]?.reason || 'Unknown error', 
-          //   processingTime
-          // );
+          await this.trackMessageEvent(
+            campaignId, 
+            contact, 
+            finalMessage, 
+            'failed', 
+            ejoinResponse, 
+            ejoinResponse?.[0]?.reason || 'Unknown error', 
+            processingTime
+          );
 
           // Emit progress update even on failure to show failed count
           await this.emitCampaignProgress(campaignId);
@@ -328,15 +328,15 @@ class CampaignService {
         await this.updateCampaignStats(campaignId, { failedMessages: 1 });
 
         // Track errored message
-        // await this.trackMessageEvent(
-        //   campaignId, 
-        //   contact, 
-        //   finalMessage, 
-        //   'failed', 
-        //   null, 
-        //   err.message, 
-        //   processingTime
-        // );
+        await this.trackMessageEvent(
+          campaignId, 
+          contact, 
+          finalMessage, 
+          'failed', 
+          null, 
+          err.message, 
+          processingTime
+        );
 
         // Emit progress update on error
         await this.emitCampaignProgress(campaignId);

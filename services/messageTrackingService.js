@@ -87,79 +87,49 @@ class MessageTrackingService {
     }
   }
 
-  /**
-   * Update message status (for delivery reports, read receipts, etc.)
-   */
-  async updateMessageStatus(messageId, newStatus, reason = '', deliveryData = null) {
-    try {
-      const messageDetail = await MessageDetail.findOne({ messageId });
-      
-      if (!messageDetail) {
-        console.warn(`MessageDetail not found for messageId: ${messageId}`);
-        return null;
-      }
-
-      const oldStatus = messageDetail.status;
-
-      // Update status with history
-      await messageDetail.updateStatus(newStatus, reason, deliveryData);
-      await messageDetail.save();
-
-      // Update campaign stats counters
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-
-      const campaignStats = await CampaignStats.findOne({
-        campaign: messageDetail.campaign,
-        date: today
-      });
-
-      if (campaignStats) {
-        await this.updateCampaignStatsCounters(
-          messageDetail.campaign, 
-          campaignStats._id, 
-          newStatus, 
-          oldStatus
-        );
-      }
-
-      console.log(`Updated message ${messageId} status from ${oldStatus} to ${newStatus}`);
-      return messageDetail;
-
-    } catch (error) {
-      console.error('Error updating message status:', error);
-      throw error;
-    }
-  }
 
   /**
-   * Update campaign stats counters
-   * Internal function to handle counter updates
+   * Update campaign & Campaign stats counters
    */
   async updateCampaignStatsCounters(campaignId, campaignStatsId, newStatus, oldStatus = null) {
     const updateQuery = {};
     
     // Decrement old status counter if provided
-    if (oldStatus) {
-      switch (oldStatus) {
-        case 'sent': updateQuery.$inc = { sentMessages: -1 }; break;
-        case 'delivered': updateQuery.$inc = { deliveredMessages: -1 }; break;
-        case 'failed': updateQuery.$inc = { failedMessages: -1 }; break;
-        case 'read': updateQuery.$inc = { readMessages: -1 }; break;
-        case 'pending': updateQuery.$inc = { pendingMessages: -1 }; break;
-      }
-    }
+    // if (oldStatus) {
+    //   switch (oldStatus) {
+    //     case 'sent': updateQuery.$inc = { sentMessages: -1 }; break;
+    //     case 'delivered': updateQuery.$inc = { deliveredMessages: -1 }; break;
+    //     case 'failed': updateQuery.$inc = { failedMessages: -1 }; break;
+    //     case 'read': updateQuery.$inc = { readMessages: -1 }; break;
+    //     case 'pending': updateQuery.$inc = { pendingMessages: -1 }; break;
+    //   }
+    // }
 
     // Increment new status counter
     if (!updateQuery.$inc) updateQuery.$inc = {};
     
     switch (newStatus) {
-      case 'sent': updateQuery.$inc.sentMessages = 1; break;
-      case 'delivered': updateQuery.$inc.deliveredMessages = 1; break;
-      case 'failed': updateQuery.$inc.failedMessages = 1; break;
-      case 'read': updateQuery.$inc.readMessages = 1; break;
-      case 'pending': updateQuery.$inc.pendingMessages = 1; break;
-    }
+      case 'sent':
+        updateQuery.$inc.sentMessages = 1;
+        updateQuery.$inc.deliveredMessages = 1; // also increment delivered
+        break;
+    
+      case 'delivered':
+        updateQuery.$inc.deliveredMessages = 1;
+        break;
+    
+      case 'failed':
+        updateQuery.$inc.failedMessages = 1;
+        break;
+    
+      case 'read':
+        updateQuery.$inc.readMessages = 1;
+        break;
+    
+      case 'pending':
+        updateQuery.$inc.pendingMessages = 1;
+        break;
+    }    
 
     await CampaignStats.findByIdAndUpdate(campaignStatsId, updateQuery);
     
@@ -168,6 +138,8 @@ class MessageTrackingService {
     switch (newStatus) {
       case 'sent': 
         campaignUpdate.$inc = { sentMessages: 1 };
+        campaignUpdate.$inc = { deliveredMessages: 1 };
+        campaignUpdate.$inc = { sentCount: 1 };
         break;
       case 'delivered': 
         campaignUpdate.$inc = { deliveredMessages: 1 };
@@ -177,9 +149,9 @@ class MessageTrackingService {
         break;
     }
 
-    if (campaignUpdate.$inc) {
-      await Campaign.findByIdAndUpdate(campaignId, campaignUpdate);
-    }
+    // if (campaignUpdate.$inc) {
+    //   await Campaign.findByIdAndUpdate(campaignId, campaignUpdate);
+    // }
   }
 
   /**
@@ -256,6 +228,51 @@ class MessageTrackingService {
 
     } catch (error) {
       console.error('Error getting campaign message history:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Update message status (for delivery reports, read receipts, etc.)
+   */
+  async updateMessageStatus(messageId, newStatus, reason = '', deliveryData = null) {
+    try {
+      const messageDetail = await MessageDetail.findOne({ messageId });
+      
+      if (!messageDetail) {
+        console.warn(`MessageDetail not found for messageId: ${messageId}`);
+        return null;
+      }
+
+      const oldStatus = messageDetail.status;
+
+      // Update status with history
+      await messageDetail.updateStatus(newStatus, reason, deliveryData);
+      await messageDetail.save();
+
+      // Update campaign stats counters
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+
+      const campaignStats = await CampaignStats.findOne({
+        campaign: messageDetail.campaign,
+        date: today
+      });
+
+      if (campaignStats) {
+        await this.updateCampaignStatsCounters(
+          messageDetail.campaign, 
+          campaignStats._id, 
+          newStatus, 
+          oldStatus
+        );
+      }
+
+      console.log(`Updated message ${messageId} status from ${oldStatus} to ${newStatus}`);
+      return messageDetail;
+
+    } catch (error) {
+      console.error('Error updating message status:', error);
       throw error;
     }
   }

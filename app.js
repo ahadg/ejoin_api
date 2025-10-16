@@ -51,9 +51,9 @@ const initializeRedis = async () => {
     throw error;
   }
 };
-
+console.log("process.env.MONGODB_URI",process.env.MONGODB_URI)
 // Connect to MongoDB
-mongoose.connect(process.env.MONGODB_URI || 'mongodb://localhost:27017/sms-platform', {
+mongoose.connect(`${process.env.MONGODB_URI}`, {
   useNewUrlParser: true,
   useUnifiedTopology: true,
 })
