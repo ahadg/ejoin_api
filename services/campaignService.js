@@ -476,6 +476,7 @@ class CampaignService {
           companyName: campaign?.message?.settings?.get("companyName") || 'Your company',
           unsubscribeText: campaign?.message?.settings?.get("unsubscribeText"),
           customInstructions: campaign?.message?.settings?.get("customInstructions"),
+          category: campaign?.message?.category,
           previousMessages: previousMessages // Pass previous messages for context only
         });
         
