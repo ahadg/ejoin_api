@@ -8,7 +8,7 @@ const mailerSend = new MailerSend({
 
 export async function sendEmail(obj) {
   try {
-    const sentFrom = new Sender("noreply@EJOIN.com", "EJOIN");
+    const sentFrom = new Sender("noreply@manapnl.com", "EJOIN");
 
     const recipients = [
       new Recipient(obj.to, "Your Client")
