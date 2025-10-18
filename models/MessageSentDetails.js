@@ -94,6 +94,11 @@ const messageSentdetailschema = new mongoose.Schema({
   processingTime: { type: Number }, // in milliseconds
   retryCount: { type: Number, default: 0 },
   maxRetries: { type: Number, default: 3 },
+  simId : {type : String},
+  simId: { 
+    type: mongoose.Schema.Types.ObjectId, 
+    ref: "Sim" 
+  },
   
   // API Responses
   sendResponse: { type: mongoose.Schema.Types.Mixed },

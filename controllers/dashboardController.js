@@ -49,13 +49,22 @@ exports.getDashboardStats = async (req, res) => {
     const totalDevices = devices.length;
     const activeDevices = devices.filter(d => d.status === 'online').length;
     
-    // SIM Statistics
+    // SIM Statistics - Updated to include daily limits
     const totalSIMs = devices?.[0]?.totalSlots;
     const activeSIMs = devices?.[0]?.activeSlots;
     const simsWithSignal = sims.filter(sim => sim.signalStrength && sim.signalStrength > 0);
     const averageSignal = simsWithSignal.length > 0 
       ? simsWithSignal.reduce((sum, sim) => sum + sim.signalStrength, 0) / simsWithSignal.length 
       : 0;
+
+    // Calculate SIM daily usage statistics
+    const activeSimsWithLimits = sims.filter(sim => 
+      sim.inserted && sim.slotActive && sim.status === 'active'
+    );
+    
+    const totalSimDailyLimit = activeSimsWithLimits.reduce((sum, sim) => sum + (sim.dailyLimit || 100), 0);
+    const totalSimDailySent = activeSimsWithLimits.reduce((sum, sim) => sum + (sim.dailySent || 0), 0);
+    const simUsagePercentage = totalSimDailyLimit > 0 ? (totalSimDailySent / totalSimDailyLimit) * 100 : 0;
 
     // Campaign Statistics
     const totalCampaigns = campaigns.length;
@@ -81,7 +90,7 @@ exports.getDashboardStats = async (req, res) => {
       ? ((totalDeliveredAllTime / totalSentAllTime) * 100).toFixed(1)
       : 0;
 
-    // Processing Time Statistics (Updated from cost)
+    // Processing Time Statistics
     const totalProcessingTimeToday = todayStats.reduce((sum, stat) => sum + (stat.averageProcessingTime || 0), 0);
     const avgProcessingTimeToday = todayStats.length > 0 
       ? totalProcessingTimeToday / todayStats.length 
@@ -115,12 +124,18 @@ exports.getDashboardStats = async (req, res) => {
         messagesSentToday: totalSentToday,
         successRate: `${successRate}%`,
         
+        // SIM Daily Usage Stats
+        simDailyUsage: {
+          totalSent: totalSimDailySent,
+          totalLimit: totalSimDailyLimit,
+          usagePercentage: Math.round(simUsagePercentage),
+          activeSimsCount: activeSimsWithLimits.length
+        },
+        
         // Additional Stats
         totalCampaigns,
         activeCampaigns,
         totalContacts,
-        // averageProcessingTimeToday: parseFloat(avgProcessingTimeToday.toFixed(2)), 
-        // averageProcessingTimeAllTime: parseFloat(avgProcessingTimeAllTime.toFixed(2)), 
         
         // Performance Metrics
         performance: {
@@ -128,7 +143,6 @@ exports.getDashboardStats = async (req, res) => {
           failureRate: `${failureRate}%`,
           averageSignal: Math.round(averageSignal),
           messageTrend: parseFloat(messageTrend),
-          //avgProcessingTime: parseFloat(avgProcessingTimeToday.toFixed(2)) 
         },
         
         // Device Health
@@ -143,7 +157,17 @@ exports.getDashboardStats = async (req, res) => {
           active: activeSIMs,
           inactive: totalSIMs - activeSIMs,
           goodSignal: sims.filter(sim => sim.signalStrength > 20).length,
-          weakSignal: sims.filter(sim => sim.signalStrength <= 20 && sim.signalStrength > 0).length
+          weakSignal: sims.filter(sim => sim.signalStrength <= 20 && sim.signalStrength > 0).length,
+          // Add daily limit info
+          dailyLimitUsage: Math.round(simUsagePercentage),
+          nearLimit: activeSimsWithLimits.filter(sim => {
+            const usage = ((sim.dailySent || 0) / (sim.dailyLimit || 100)) * 100;
+            return usage >= 80 && usage < 100;
+          }).length,
+          exceededLimit: activeSimsWithLimits.filter(sim => {
+            const usage = ((sim.dailySent || 0) / (sim.dailyLimit || 100)) * 100;
+            return usage >= 100;
+          }).length
         },
         
         // Campaign Progress
@@ -161,7 +185,7 @@ exports.getDashboardStats = async (req, res) => {
         // Recent Activity
         recentActivity,
         
-        // Processing Time Insights (Optional - if you want to show more detailed metrics)
+        // Processing Time Insights
         processingInsights: {
           fastestCampaign: campaigns.length > 0 
             ? Math.min(...campaigns.map(c => c.averageProcessingTime || 0)).toFixed(2)
@@ -186,14 +210,20 @@ exports.getDashboardDevices = async (req, res) => {
       .select('name status ipAddress location totalSlots activeSlots lastSeen temperature uptime dailySent dailyLimit firmwareVersion')
       .sort({ status: -1, createdAt: -1 });
 
-    // Get SIM data for each device
+    // Get detailed SIM data for each device
     const devicesWithSims = await Promise.all(
       devices.map(async (device) => {
         const sims = await Sim.find({ device: device._id })
-          .select('portNumber phoneNumber status operator signalStrength networkType balance lastUpdated');
+          .select('portNumber phoneNumber status operator signalStrength networkType balance dailySent dailyLimit inserted slotActive lastUpdated')
+          .sort({ port: 1, slot: 1 });
         
-        const activeSims = sims.filter(sim => sim.status === 'active');
+        const activeSims = sims.filter(sim => sim.inserted && sim.slotActive && sim.status === 'active');
         const simsWithGoodSignal = activeSims.filter(sim => sim.signalStrength > 20);
+        
+        // Calculate SIM daily usage for this device
+        const simDailySent = activeSims.reduce((sum, sim) => sum + (sim.dailySent || 0), 0);
+        const simDailyLimit = activeSims.reduce((sum, sim) => sum + (sim.dailyLimit || 100), 0);
+        const simUsagePercentage = simDailyLimit > 0 ? (simDailySent / simDailyLimit) * 100 : 0;
         
         return {
           _id: device._id,
@@ -210,6 +240,11 @@ exports.getDashboardDevices = async (req, res) => {
             sent: device.dailySent || 0,
             limit: device.dailyLimit || 15000
           },
+          simDailyUsage: {
+            sent: simDailySent,
+            limit: simDailyLimit,
+            usagePercentage: Math.round(simUsagePercentage)
+          },
           firmwareVersion: device.firmwareVersion,
           simHealth: {
             total: sims.length,
@@ -217,7 +252,24 @@ exports.getDashboardDevices = async (req, res) => {
             goodSignal: simsWithGoodSignal.length,
             operators: [...new Set(activeSims.map(sim => sim.operator).filter(Boolean))]
           },
-          sims: sims.slice(0, 4) // Show first 4 SIMs for preview
+          sims: sims.map(sim => ({
+            _id: sim._id,
+            portNumber: sim.portNumber,
+            phoneNumber: sim.phoneNumber,
+            status: sim.status,
+            operator: sim.operator,
+            signalStrength: sim.signalStrength,
+            networkType: sim.networkType,
+            balance: sim.balance,
+            inserted: sim.inserted,
+            slotActive: sim.slotActive,
+            dailyUsage: {
+              sent: sim.dailySent || 0,
+              limit: sim.dailyLimit || 100,
+              usagePercentage: sim.dailyLimit > 0 ? Math.round(((sim.dailySent || 0) / sim.dailyLimit) * 100) : 0
+            },
+            lastUpdated: sim.lastUpdated
+          }))
         };
       })
     );
@@ -230,13 +282,100 @@ exports.getDashboardDevices = async (req, res) => {
           totalDevices: devices.length,
           onlineDevices: devices.filter(d => d.status === 'online').length,
           totalSIMs: devices.reduce((sum, device) => sum + device.totalSlots, 0),
-          activeSIMs: devicesWithSims.reduce((sum, device) => sum + device.activeSlots, 0)
+          activeSIMs: devicesWithSims.reduce((sum, device) => sum + device.activeSlots, 0),
+          // Add SIM daily usage summary
+          simDailyUsage: {
+            totalSent: devicesWithSims.reduce((sum, device) => sum + device.simDailyUsage.sent, 0),
+            totalLimit: devicesWithSims.reduce((sum, device) => sum + device.simDailyUsage.limit, 0),
+            overallUsage: devicesWithSims.reduce((sum, device) => {
+              const deviceUsage = device.simDailyUsage.limit > 0 ? 
+                (device.simDailyUsage.sent / device.simDailyUsage.limit) * 100 : 0;
+              return sum + deviceUsage;
+            }, 0) / devicesWithSims.length
+          }
         }
       }
     });
   } catch (error) {
     console.error('Get dashboard devices error:', error);
     res.status(500).json({ code: 500, reason: 'Error fetching devices' });
+  }
+};
+
+// Get active SIMs with daily limits
+exports.getActiveSIMs = async (req, res) => {
+  try {
+    const userId = req.user._id;
+    
+    // Get user's devices first
+    const userDevices = await Device.find({ user: userId }).select('_id');
+    const deviceIds = userDevices.map(device => device._id);
+    
+    // Get active SIMs with daily usage
+    const activeSims = await Sim.find({
+      device: { $in: deviceIds },
+      inserted: true,
+      slotActive: true,
+      status: 'active'
+    })
+    .populate('device', 'name status')
+    .select('portNumber phoneNumber status operator signalStrength networkType balance dailySent dailyLimit inserted slotActive lastUpdated')
+    .sort({ 'device.name': 1, port: 1, slot: 1 });
+
+    // Format SIM data with usage percentages
+    const formattedSims = activeSims.map(sim => {
+      const usagePercentage = sim.dailyLimit > 0 ? 
+        Math.round(((sim.dailySent || 0) / sim.dailyLimit) * 100) : 0;
+      
+      let usageStatus = 'normal';
+      if (usagePercentage >= 100) {
+        usageStatus = 'exceeded';
+      } else if (usagePercentage >= 80) {
+        usageStatus = 'warning';
+      }
+
+      return {
+        _id: sim._id,
+        deviceName: sim.device.name,
+        deviceStatus: sim.device.status,
+        portNumber: sim.portNumber,
+        phoneNumber: sim.phoneNumber,
+        operator: sim.operator,
+        signalStrength: sim.signalStrength,
+        networkType: sim.networkType,
+        balance: sim.balance,
+        dailyUsage: {
+          sent: sim.dailySent || 0,
+          limit: sim.dailyLimit || 100,
+          usagePercentage: usagePercentage,
+          status: usageStatus
+        },
+        lastUpdated: sim.lastUpdated
+      };
+    });
+
+    // Calculate summary statistics
+    const totalSent = formattedSims.reduce((sum, sim) => sum + sim.dailyUsage.sent, 0);
+    const totalLimit = formattedSims.reduce((sum, sim) => sum + sim.dailyUsage.limit, 0);
+    const overallUsage = totalLimit > 0 ? Math.round((totalSent / totalLimit) * 100) : 0;
+
+    res.json({
+      code: 200,
+      data: {
+        sims: formattedSims,
+        summary: {
+          totalActiveSIMs: formattedSims.length,
+          totalDailySent: totalSent,
+          totalDailyLimit: totalLimit,
+          overallUsage: overallUsage,
+          simsNearLimit: formattedSims.filter(sim => sim.dailyUsage.status === 'warning').length,
+          simsExceededLimit: formattedSims.filter(sim => sim.dailyUsage.status === 'exceeded').length
+        }
+      }
+    });
+  } catch (error) {
+    console.error('Get active SIMs error:', error);
+    res.status(500).json({ code: 500, reason: 'Error fetching active SIMs' });
   }
 };
 

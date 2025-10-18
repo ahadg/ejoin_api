@@ -141,9 +141,7 @@ async function processPortStatus(portData) {
       deviceId 
     } = portData;
     
-    //console.log(`Processing port status for port ${portId}, status: ${statusCode}`);
-    
-    // Parse port and slot from portId (format like "1.01", "2.01", etc.)
+    // Parse port and slot from portId
     const [portNumber, slotNumber] = portId.split('.').map(Number);
     
     // Get device ID if not provided
@@ -175,10 +173,17 @@ async function processPortStatus(portData) {
         slotActive: slot_active === 1,
         ledEnabled: led === 1,
         networkType: network,
-        lastUpdated: new Date()
+        lastUpdated: new Date(),
+        // Initialize daily limit if not set
+        $setOnInsert: {
+          dailyLimit: 300, // Default daily limit
+          dailySent: 0,
+          todaySent: 0,
+          lastResetDate: new Date()
+        }
       };
       
-      // Only add these fields if they exist (for active SIMs)
+      // Only add these fields if they exist
       if (imsi) simData.imsi = imsi;
       if (iccid) simData.iccid = iccid;
       if (sn) simData.phoneNumber = sn;
@@ -187,7 +192,7 @@ async function processPortStatus(portData) {
       if (sig) simData.signalStrength = sig;
       
       const simCard = await Sim.findOneAndUpdate(
-        { device: deviceObjectId, port : portNumber, slot :slotNumber  },
+        { device: deviceObjectId, port: portNumber, slot: slotNumber },
         simData,
         { 
           upsert: true, 
@@ -198,12 +203,8 @@ async function processPortStatus(portData) {
       
       console.log(`Port ${portId} status updated successfully`);
     } else {
-      // SIM is not inserted or not active, remove it if it exists
-      // await Sim.deleteOne({ 
-      //   device: deviceObjectId, 
-      //   port: portId 
-      // });
-      console.log(`Port ${portId} - SIM not inserted or inactive, removed from database`);
+      // SIM is not inserted or not active
+      console.log(`Port ${portId} - SIM not inserted or inactive`);
     }
     
   } catch (error) {

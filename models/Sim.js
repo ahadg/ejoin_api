@@ -21,7 +21,6 @@ const simSchema = new mongoose.Schema({
   },
   portNumber: { 
     type: String, 
-    //required: true 
   },
   port: { 
     type: Number, 
@@ -74,6 +73,23 @@ const simSchema = new mongoose.Schema({
   ledEnabled: { 
     type: Boolean, 
     default: false 
+  },
+  // NEW FIELDS FOR DAILY LIMIT
+  dailyLimit: { 
+    type: Number, 
+    default: 300 
+  },
+  dailySent: { 
+    type: Number, 
+    default: 0 
+  },
+  todaySent: { 
+    type: Number, 
+    default: 0 
+  },
+  lastResetDate: { 
+    type: Date, 
+    default: Date.now 
   },
   ussdCommands: [ussdCommandSchema],
   lastUpdated: { 

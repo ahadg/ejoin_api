@@ -4,6 +4,7 @@ const Campaign = require('../models/Campaign');
 const ContactList = require('../models/ContactList');
 const Contact = require('../models/Contact');
 const Device = require('../models/Device');
+const Sim = require('../models/Sim');
 const redis = require('../config/redis');
 const DeviceClient = require('./deviceClient');
 const aiGenerationController = require('../controllers/aiGenerationController');
@@ -15,6 +16,7 @@ class CampaignService {
     this.queues = new Map();   // queueName -> Queue
     this.workers = new Map();  // queueName -> Worker
     this.messageTracking = messageTrackingService; 
+    this.simRoundRobinIndex = new Map(); // campaignId -> current SIM index
     this.init();
   }
 
@@ -62,6 +64,97 @@ class CampaignService {
     this.workers.set(queueName, worker);
 
     return queue;
+  }
+
+  // Get available SIMs for a device in circular order
+  async getAvailableSims(deviceId, campaignId) {
+    try {
+      // Get all active SIMs for the device
+      console.log("deviceId",deviceId)
+      const sims = await Sim.find({
+        device: deviceId,
+        inserted: true,
+        slotActive: true,
+        status: 'active'
+      }).sort({ port: 1, slot: 1 });
+
+      if (sims.length === 0) {
+        throw new Error(`No active SIMs found for device ${deviceId}`);
+      }
+
+      // Check daily limits for each SIM
+      const availableSims = [];
+      for (const sim of sims) {
+        // Reset daily count if it's a new day
+        await this.resetSimDailyCountIfNeeded(sim);
+        
+        if (sim.dailySent < sim.dailyLimit) {
+          availableSims.push(sim);
+        }
+      }
+
+      if (availableSims.length === 0) {
+        throw new Error(`All SIMs have reached their daily limits for device ${deviceId}`);
+      }
+
+      return availableSims;
+    } catch (error) {
+      console.error('Error getting available SIMs:', error);
+      throw error;
+    }
+  }
+
+  // Reset SIM daily count if it's a new day
+  async resetSimDailyCountIfNeeded(sim) {
+    const today = new Date().toDateString();
+    const lastReset = sim.lastResetDate.toDateString();
+    
+    if (today !== lastReset) {
+      await Sim.findByIdAndUpdate(sim._id, {
+        dailySent: 0,
+        todaySent: 0,
+        lastResetDate: new Date()
+      });
+    }
+  }
+
+  // Get next SIM in circular order
+  async getNextSim(deviceId, campaignId) {
+    try {
+      const availableSims = await this.getAvailableSims(deviceId, campaignId);
+      
+      // Initialize or get current index
+      if (!this.simRoundRobinIndex.has(campaignId)) {
+        this.simRoundRobinIndex.set(campaignId, 0);
+      }
+      
+      let currentIndex = this.simRoundRobinIndex.get(campaignId);
+      
+      // Find next available SIM (in case some reached limits)
+      let attempts = 0;
+      while (attempts < availableSims.length) {
+        const sim = availableSims[currentIndex];
+        
+        // Check if this SIM is still available (might have been updated)
+        const freshSim = await Sim.findById(sim._id);
+        if (freshSim && freshSim.dailySent < freshSim.dailyLimit) {
+          // Update index for next call
+          const nextIndex = (currentIndex + 1) % availableSims.length;
+          this.simRoundRobinIndex.set(campaignId, nextIndex);
+          
+          return freshSim;
+        }
+        
+        // Move to next SIM
+        currentIndex = (currentIndex + 1) % availableSims.length;
+        attempts++;
+      }
+      
+      throw new Error('No available SIMs found within daily limits');
+    } catch (error) {
+      console.error('Error getting next SIM:', error);
+      throw error;
+    }
   }
 
   // Emit campaign progress via socket.io
@@ -137,7 +230,7 @@ class CampaignService {
   }
 
   // Track message with comprehensive details
-  async trackMessageEvent(campaignId, contact, messageData, status, response = null, error = null, processingTime = null) {
+  async trackMessageEvent(campaignId, contact, messageData, status, response = null, error = null, processingTime = null, simId = null) {
     try {
       const campaign = await Campaign.findById(campaignId)
         .populate('user')
@@ -158,6 +251,7 @@ class CampaignService {
         characterCount: messageData.characterCount,
         deviceId: campaign.device._id,
         deviceName: campaign.device.name,
+        simId: simId, // Track which SIM was used
         taskId: `task-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
         status: status,
         processingTime: processingTime,
@@ -167,14 +261,14 @@ class CampaignService {
       };
 
       await this.messageTracking.trackMessage(trackingData);
-      console.log(`Message tracked for campaign ${campaignId}, contact ${contact.phoneNumber}, status: ${status}`);
+      console.log(`Message tracked for campaign ${campaignId}, contact ${contact.phoneNumber}, status: ${status}, SIM: ${simId}`);
     } catch (trackingError) {
       console.error(`Error tracking message for campaign ${campaignId}:`, trackingError);
       // Don't throw here - we don't want message tracking failures to stop the campaign
     }
   }
 
-  // New: process entire campaign job (the worker will call this)
+  // Process entire campaign job (the worker will call this)
   async processCampaignJob(job) {
     const { campaignId } = job.data;
     console.log(`Worker processing campaign ${campaignId}`);
@@ -190,19 +284,25 @@ class CampaignService {
         populate: { path: 'variants', model: 'MessageVariant' }
       });
 
-    if (!campaign || !campaign.contactList) {
-      console.error(`Campaign or contact list not found for ${campaignId}`);
+    if (!campaign || !campaign.contactList || !campaign.device) {
+      console.error(`Campaign, contact list, or device not found for ${campaignId}`);
       await Campaign.findByIdAndUpdate(campaignId, { status: 'failed' });
       await this.emitCampaignProgress(campaignId);
       return;
     }
 
-    // Re-fetch device (fresh)
-    const device = await Device.findById(campaign.device._id);
-    if (!device) {
-      console.error(`Device not found for campaign ${campaignId}`);
-      await Campaign.findByIdAndUpdate(campaignId, { status: 'failed' });
-      await this.emitCampaignProgress(campaignId);
+    // Get available SIMs for the device
+    let availableSims;
+    try {
+      availableSims = await this.getAvailableSims(campaign.device._id, campaignId);
+      if (availableSims.length === 0) {
+        console.error(`No available SIMs for campaign ${campaignId}`);
+        await this.pauseCampaign(campaignId, 'no_available_sims');
+        return;
+      }
+    } catch (error) {
+      console.error(`Error getting SIMs for campaign ${campaignId}:`, error);
+      await this.pauseCampaign(campaignId, 'sim_error');
       return;
     }
 
@@ -229,10 +329,13 @@ class CampaignService {
     }
 
     // Ensure campaign status
-    await Campaign.findByIdAndUpdate(campaignId, { status: 'active', processingStartedAt: campaign.processingStartedAt || new Date() });
+    await Campaign.findByIdAndUpdate(campaignId, { 
+      status: 'active', 
+      processingStartedAt: campaign.processingStartedAt || new Date() 
+    });
     await this.emitCampaignProgress(campaignId);
 
-    // iterate contacts sequentially starting from startIndex
+    // Process contacts sequentially starting from startIndex
     for (let i = startIndex; i < contacts.length; i++) {
       const contact = contacts[i];
       const processingStartTime = Date.now();
@@ -255,21 +358,14 @@ class CampaignService {
         return;
       }
 
-      // Re-load device to get the latest dailySent
-      const freshDevice = await Device.findById(device._id);
-      if (!freshDevice) {
-        console.error(`Device missing while processing campaign ${campaignId}. Pausing.`);
-        await this.pauseCampaign(campaignId, 'device_missing');
+      // Get next available SIM
+      let sim;
+      try {
+        sim = await this.getNextSim(campaign.device._id, campaignId);
+      } catch (error) {
+        console.error(`No available SIM found for campaign ${campaignId}:`, error);
+        await this.pauseCampaign(campaignId, 'daily_limit_reached');
         return;
-      }
-
-      // Check device daily limit
-      if (typeof freshDevice.dailyLimit === 'number' && typeof freshDevice.dailySent === 'number') {
-        if (freshDevice.dailySent >= freshDevice.dailyLimit) {
-          console.log(`Device ${freshDevice._id} reached daily limit. Pausing campaign ${campaignId}`);
-          await this.pauseCampaign(campaignId, 'daily_limit_reached');
-          return;
-        }
       }
 
       // Check campaign daily limit
@@ -283,38 +379,39 @@ class CampaignService {
       // Generate message variant
       const finalMessage = await this.generateMessageVariant(campaignId, campaign.taskSettings || {}, contact);
 
-      // Prepare SMS task
-      const smsTask = 
-      {
+      // Prepare SMS task with specific SIM port
+      const smsTask = {
         id: Number(`${Date.now()}${Math.floor(Math.random() * 1000)}`),
-        from: "",
+        from: sim.port.toString(), // Use SIM port number as 'from'
         sms: finalMessage.content,
         interval_min: 0,
         interval_max: 1000,
         timeout: campaign.taskSettings?.timeout || 30,
         charset: campaign.taskSettings?.charset?.toLowerCase() === 'utf-8' ? 'utf8' : 'utf8',
         coding: campaign.taskSettings?.coding || 0,
-        //sms_type: campaign.taskSettings?.sms_type || 0,
         sdr: campaign.taskSettings?.sdr !== false,
         fdr: campaign.taskSettings?.fdr !== false,
         dr: campaign.taskSettings?.dr !== false,
         to_all: campaign.taskSettings?.to_all || true,
-        //flash_sms: campaign.taskSettings?.flash_sms || false,
         recipients: [contact.phoneNumber],
       };
 
       try {
-
-        const client = new DeviceClient(freshDevice);
+        const client = new DeviceClient(campaign.device);
         const ejoinResponse = await client.sendSms([smsTask]);
         console.log("sendSms_result", ejoinResponse);
 
         const processingTime = Date.now() - processingStartTime;
 
         if (ejoinResponse?.[0]?.reason === "OK") {  
-          // Update campaign stats and device counters
+          // Update campaign stats and SIM counters
           await this.updateCampaignStats(campaignId, { sentMessages: 1, lastSentAt: new Date() });
-          await this.updateDeviceDailyCount(freshDevice._id);
+          await this.updateSimDailyCount(sim._id);
+
+          // Update device last seen
+          await Device.findByIdAndUpdate(campaign.device._id, {
+            $set: { lastSeen: new Date() }
+          });
 
           // Track successful message
           await this.trackMessageEvent(
@@ -324,7 +421,8 @@ class CampaignService {
             'sent', 
             ejoinResponse, 
             null, 
-            processingTime
+            processingTime,
+            sim._id
           );
 
           // Optionally persist lastSentContactIndex
@@ -347,7 +445,8 @@ class CampaignService {
             'failed', 
             ejoinResponse, 
             ejoinResponse?.[0]?.reason || 'Unknown error', 
-            processingTime
+            processingTime,
+            sim._id
           );
 
           // Emit progress update even on failure to show failed count
@@ -367,24 +466,14 @@ class CampaignService {
           'failed', 
           null, 
           err.message, 
-          processingTime
+          processingTime,
+          sim._id
         );
 
         // Emit progress update on error
         await this.emitCampaignProgress(campaignId);
         // Optionally implement retry/backoff here; for now continue to next contact
       }
-
-      // Completed campaign
-      await Campaign.findByIdAndUpdate(campaignId, {
-        status: 'completed',
-        completedAt: new Date()
-      });
-      
-      // Emit final progress update
-      await this.emitCampaignProgress(campaignId);
-      await this.emitCampaignStatusChange(campaignId, 'active', 'completed', 'campaign_finished');
-      
 
       // Delay between sends (interval). Worker will sleep here.
       const delay = this.getRandomDelay(
@@ -395,11 +484,21 @@ class CampaignService {
       await new Promise(resolve => setTimeout(resolve, delay));
     }
 
+    // Campaign completed
+    await Campaign.findByIdAndUpdate(campaignId, {
+      status: 'completed',
+      completedAt: new Date()
+    });
+    
+    // Emit final progress update
+    await this.emitCampaignProgress(campaignId);
+    await this.emitCampaignStatusChange(campaignId, 'active', 'completed', 'campaign_finished');
+    
     console.log(`Campaign ${campaignId} completed successfully`);
     return;
   }
 
-  // Generate message variant (AI or static) - unchanged
+  // Generate message variant (AI or static)
   async generateMessageVariant(campaignId, taskSettings, contact) {
     const campaign = await Campaign.findById(campaignId)
       .populate('message')
@@ -531,7 +630,6 @@ class CampaignService {
       characterCount: (campaign?.messageContent || 'Default message').length
     };
   }  
-  
 
   // Check daily message limits
   async checkDailyLimit(campaignId, deviceId) {
@@ -544,11 +642,13 @@ class CampaignService {
       return false;
     }
 
-    if (device.dailySent >= device.dailyLimit) {
+    // Check if any SIMs are available
+    try {
+      const availableSims = await this.getAvailableSims(deviceId, campaignId);
+      return availableSims.length > 0;
+    } catch (error) {
       return false;
     }
-
-    return true;
   }
 
   async getTodaySentCount(campaignId) {
@@ -698,6 +798,9 @@ class CampaignService {
       this.workers.delete(queueName);
     }
 
+    // Clear SIM round-robin index for this campaign
+    this.simRoundRobinIndex.delete(campaignId);
+
     console.log("campaign_stopped");
     
     // Update campaign status
@@ -733,6 +836,14 @@ class CampaignService {
     await Campaign.findByIdAndUpdate(campaignId, updateData);
   }
 
+  // Update SIM daily count
+  async updateSimDailyCount(simId) {
+    await Sim.findByIdAndUpdate(simId, {
+      $inc: { dailySent: 1, todaySent: 1 },
+      $set: { lastUpdated: new Date() }
+    });
+  }
+
   async getPreviousCampaignMessages(campaignId, limit = 50) {
     try {
       const previousMessages = await MessageSentDetails.find({
@@ -751,19 +862,16 @@ class CampaignService {
     }
   }
 
-  // Update device daily count
-  async updateDeviceDailyCount(deviceId) {
-    await Device.findByIdAndUpdate(deviceId, {
-      $inc: { dailySent: 1 },
-      $set: { lastSeen: new Date() }
-    });
-  }
-
   // Reset daily counts (run this daily via cron). Now requeues paused campaigns.
   async resetDailyCounts() {
     // Reset campaign daily counts
     await Campaign.updateMany({}, {
       $set: { sentMessagesToday: 0 }
+    });
+
+    // Reset SIM daily counts
+    await Sim.updateMany({}, {
+      $set: { dailySent: 0, todaySent: 0, lastResetDate: new Date() }
     });
 
     // Reset device daily counts
@@ -774,7 +882,10 @@ class CampaignService {
     // Resume paused campaigns that hit daily limits by re-queuing them
     const pausedCampaigns = await Campaign.find({
       status: 'paused',
-      pauseReason: 'daily_limit_reached'
+      $or: [
+        { pauseReason: 'daily_limit_reached' },
+        { pauseReason: 'no_available_sims' }
+      ]
     });
 
     for (const campaign of pausedCampaigns) {
@@ -786,7 +897,7 @@ class CampaignService {
       }
     }
 
-    console.log('Daily counts reset and campaigns resumed where applicable');
+    console.log('Daily counts reset for campaigns, SIMs, and devices');
   }
 
   // Cleanup stuck jobs
@@ -841,6 +952,7 @@ class CampaignService {
       return { status: 'error', error: error.message };
     }
   }
+
   // Restore campaign processors after server restart
   async restoreActiveCampaigns() {
     try {

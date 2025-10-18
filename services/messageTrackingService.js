@@ -25,6 +25,7 @@ class MessageTrackingService {
         processingTime,
         response,
         error,
+        simId,
         userId
       } = messageData;
 
@@ -63,6 +64,7 @@ class MessageTrackingService {
         characterCount,
         tone,
         deviceName,
+        simId,
         taskId,
         processingTime,
         sendResponse: response,
