@@ -82,13 +82,42 @@ io.use((socket, next) => {
 
 // Socket.IO connection handling
 io.on('connection', (socket) => {
-  console.log(`👤 User ${socket.userId} connected`);
+  // Extract user ID from auth token
+  //socket.userId = socket.decoded_token?.id || socket.handshake.auth.userId;
+  
+  // Get current section from query params
+  socket.currentSection = socket.handshake.query.section || 'unknown';
+  
+  console.log(`👤 User ${socket.userId} connected from section: ${socket.currentSection}`);
 
   // Join user to their personal room
   socket.join(`user:${socket.userId}`);
 
-  socket.on('disconnect', () => {
-    console.log(`👤 User ${socket.userId} disconnected`);
+  // Listen for section updates from client
+  socket.on('update-section', (section) => {
+    const oldSection = socket.currentSection;
+    socket.currentSection = section;
+    console.log(`🔄 User ${socket.userId} switched from ${oldSection} to section: ${section}`);
+  });
+
+  // Listen for inbox view status updates
+  socket.on('inbox-view-status', (data) => {
+    const { isViewingInbox, currentConversation } = data;
+    socket.isViewingInbox = isViewingInbox;
+    socket.currentConversation = currentConversation;
+    console.log(`📱 User ${socket.userId} inbox view status:`, {
+      isViewingInbox,
+      currentConversation: currentConversation ? `${currentConversation.phoneNumber} (${currentConversation.port}-${currentConversation.slot})` : 'none'
+    });
+  });
+
+  socket.on('disconnect', (reason) => {
+    console.log(`👤 User ${socket.userId} disconnected. Reason: ${reason}`);
+  });
+
+  // Error handling
+  socket.on('error', (error) => {
+    console.error(`❌ Socket error for user ${socket.userId}:`, error);
   });
 });
 
