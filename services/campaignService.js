@@ -230,7 +230,7 @@ class CampaignService {
   }
 
   // Track message with comprehensive details
-  async trackMessageEvent(campaignId, contact, messageData, status, response = null, error = null, processingTime = null, simId = null) {
+  async trackMessageEvent(campaignId, contact, messageData, status, response = null, error = null, processingTime = null, simId = null,taskId) {
     try {
       const campaign = await Campaign.findById(campaignId)
         .populate('user')
@@ -252,7 +252,7 @@ class CampaignService {
         deviceId: campaign.device._id,
         deviceName: campaign.device.name,
         simId: simId, // Track which SIM was used
-        taskId: `task-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+        taskId: taskId,
         status: status,
         processingTime: processingTime,
         response: response,
@@ -422,7 +422,8 @@ class CampaignService {
             ejoinResponse, 
             null, 
             processingTime,
-            sim._id
+            sim._id,
+            ejoinResponse?.[0]?.id
           );
 
           // Optionally persist lastSentContactIndex
@@ -446,7 +447,8 @@ class CampaignService {
             ejoinResponse, 
             ejoinResponse?.[0]?.reason || 'Unknown error', 
             processingTime,
-            sim._id
+            sim._id,
+            ejoinResponse?.[0]?.id
           );
 
           // Emit progress update even on failure to show failed count
@@ -467,7 +469,8 @@ class CampaignService {
           null, 
           err.message, 
           processingTime,
-          sim._id
+          sim._id,
+          null
         );
 
         // Emit progress update on error

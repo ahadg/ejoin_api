@@ -10,8 +10,9 @@ exports.getDashboardStats = async (req, res) => {
   try {
     const userId = req.user._id;
     const today = new Date();
-    today.setUTCHours(0, 0, 0, 0);
-    today.setUTCHours(today.getUTCHours() - 7);
+    console.log("today",today)
+    today.setHours(0, 0, 0, 0);
+    console.log("today",today)
 
     const tomorrow = new Date(today);
     tomorrow.setDate(tomorrow.getDate() + 1);

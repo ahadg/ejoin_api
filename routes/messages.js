@@ -18,6 +18,5 @@ router.get('/:id/variants', auth, messageController.getVariants);
 
 // New AI Generation routes
 router.post('/ai/generate', auth, AIGenerationController.generateVariants);
-router.post('/ai/generate-and-save', auth, AIGenerationController.generateAndSaveMessage);
 
 module.exports = router;

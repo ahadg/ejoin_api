@@ -57,7 +57,7 @@ class AIGenerationController {
         customInstructions = '',
         category = 'General' // Add category with default
       } = req.body;
-
+      console.log("generateVariants",req.body)
       // Validate required fields
       if (!prompt) {
         return res.status(400).json({ 
@@ -101,111 +101,6 @@ class AIGenerationController {
       res.status(500).json({ 
         code: 500, 
         reason: 'Error generating variants: ' + error.message 
-      });
-    }
-  };
-
-  // Generate variants and save message in one operation (updated with category validation)
-  generateAndSaveMessage = async (req, res) => {
-    try {
-      const {
-        name,
-        category = 'General', // Default to 'General'
-        prompt,
-        variantCount = 5,
-        characterLimit = 160,
-        tones = ['Professional'],
-        languages = ['English'],
-        creativityLevel = 0.7,
-        includeEmojis = false,
-        companyName,
-        unsubscribeText,
-        customInstructions = '',
-        isTemplate = false
-      } = req.body;
-
-      // Validate required fields
-      if (!name || !prompt || !companyName) {
-        return res.status(400).json({ 
-          code: 400, 
-          reason: 'Name, prompt, and company name are required' 
-        });
-      }
-
-
-      // Generate variants using Grok AI
-      const variants = await this.generateWithGrok({
-        prompt,
-        variantCount: parseInt(variantCount),
-        characterLimit: parseInt(characterLimit),
-        tones: Array.isArray(tones) ? tones : [tones],
-        languages: Array.isArray(languages) ? languages : [languages],
-        creativityLevel: parseFloat(creativityLevel),
-        includeEmojis: Boolean(includeEmojis),
-        companyName,
-        unsubscribeText: unsubscribeText || 'Reply STOP to unsubscribe',
-        customInstructions,
-        category,
-        previousMessages: []
-      });
-
-      // Create message
-      const message = new Message({
-        name,
-        category,
-        originalPrompt: prompt,
-        baseMessage: variants[0]?.content || '',
-        settings: {
-          variantCount: parseInt(variantCount),
-          characterLimit: parseInt(characterLimit),
-          tones: Array.isArray(tones) ? tones : [tones],
-          languages: Array.isArray(languages) ? languages : [languages],
-          creativityLevel: parseFloat(creativityLevel),
-          includeEmojis: Boolean(includeEmojis),
-          companyName,
-          unsubscribeText: unsubscribeText || 'Reply STOP to unsubscribe',
-          customInstructions,
-          category // Include category in settings too
-        },
-        isTemplate: Boolean(isTemplate),
-        user: req.user._id
-      });
-
-      await message.save();
-
-      // Create variants with message reference
-      const variantDocuments = variants.map((variant, index) => ({
-        message: message._id,
-        content: variant.content,
-        tone: variant.tone,
-        language: variant.language,
-        characterCount: variant.characterCount,
-        spamScore: variant.spamScore,
-        encoding: variant.encoding,
-        cost: variant.cost,
-        sortOrder: index
-      }));
-
-      const savedVariants = await MessageVariant.insertMany(variantDocuments);
-
-      // Populate the message with variants
-      const populatedMessage = await Message.findById(message._id)
-        .populate('variants');
-
-      res.status(201).json({
-        code: 201,
-        message: 'Message created with variants successfully',
-        data: { 
-          message: populatedMessage,
-          variants: savedVariants
-        }
-      });
-
-    } catch (error) {
-      console.error('Generate and save message error:', error);
-      res.status(500).json({ 
-        code: 500, 
-        reason: 'Error generating and saving message: ' + error.message 
       });
     }
   };
