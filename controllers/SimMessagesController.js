@@ -49,82 +49,81 @@ exports.getConversations = async (req, res) => {
 
     // Get all SIMs for the device
     const sims = await Sim.find({ device: deviceId }).select("_id port slot phoneNumber");
-    
-    // Get conversations grouped by phone number for each SIM
+
+    // Aggregate messages by SIM and contact
     const conversations = await SimMessages.aggregate([
       {
         $match: {
-          sim: { $in: sims.map(s => s._id) }
-        }
+          sim: { $in: sims.map((s) => s._id) },
+        },
       },
       {
-        $sort: { timestamp: -1 }
+        $sort: { timestamp: -1 },
       },
       {
         $group: {
           _id: {
-            phoneNumber: "$from",
+            contact: "$contact",
             sim: "$sim",
-            port: "$port",
-            slot: "$slot"
           },
           lastMessage: { $first: "$sms" },
           lastTimestamp: { $first: "$timestamp" },
+          lastDirection: { $first: "$direction" }, // ✅ new field
           unreadCount: {
             $sum: {
-              $cond: [{ $eq: ["$read", false] }, 1, 0]
-            }
+              $cond: [{ $eq: ["$read", false] }, 1, 0],
+            },
           },
           messageCount: { $sum: 1 },
-          contactId: { $first: "$contact" }
-        }
+        },
       },
       {
         $lookup: {
           from: "sims",
           localField: "_id.sim",
           foreignField: "_id",
-          as: "simInfo"
-        }
+          as: "simInfo",
+        },
       },
-      {
-        $unwind: "$simInfo"
-      },
+      { $unwind: "$simInfo" },
       {
         $lookup: {
           from: "contacts",
-          localField: "contactId",
+          localField: "_id.contact",
           foreignField: "_id",
-          as: "contactInfo"
-        }
+          as: "contactInfo",
+        },
       },
       {
         $unwind: {
           path: "$contactInfo",
-          preserveNullAndEmptyArrays: true
-        }
+          preserveNullAndEmptyArrays: true,
+        },
       },
       {
         $project: {
-          phoneNumber: "$_id.phoneNumber",
+          _id: 0,
+          simId: "$simInfo._id",
           port: "$simInfo.port",
           slot: "$simInfo.slot",
           lastMessage: 1,
           lastTimestamp: 1,
+          lastDirection: 1, // ✅ include in result
           unreadCount: 1,
           messageCount: 1,
-          simId: "$simInfo._id",
-          contact: "$contactInfo"
-        }
+          // Prefer phone number from contact if exists
+          phoneNumber: {
+            $ifNull: ["$contactInfo.phoneNumber", "$simInfo.phoneNumber"],
+          },
+          contact: "$contactInfo",
+        },
       },
-      {
-        $sort: { lastTimestamp: -1 }
-      }
+      { $sort: { lastTimestamp: -1 } },
     ]);
 
     res.json({
       code: 200,
-      data: { conversations }
+      data: { conversations },
     });
   } catch (err) {
     console.error("Fetch Conversations Error:", err);
@@ -132,51 +131,74 @@ exports.getConversations = async (req, res) => {
   }
 };
 
+
+
 // ================== Get Conversation Messages ==================
 exports.getConversationMessages = async (req, res) => {
   try {
-    const { phoneNumber, port, slot, deviceId } = req.query;
-    
-    if (!phoneNumber || !port || !slot || !deviceId) {
-      return res.status(400).json({ 
-        code: 400, 
-        reason: "phoneNumber, port, slot, and deviceId are required" 
+    const { simId, contactId, phoneNumber, port, slot, deviceId } = req.query;
+
+    if ((!simId && (!port || !slot || !deviceId)) || (!contactId && !phoneNumber)) {
+      return res.status(400).json({
+        code: 400,
+        reason: "Either (simId or deviceId+port+slot) and (contactId or phoneNumber) are required"
       });
     }
 
-    // Find the SIM
-    const sim = await Sim.findOne({ 
-      device: deviceId, 
-      port: parseInt(port), 
-      slot: parseInt(slot) 
-    });
-    
+    let sim;
+    let contact;
+
+    // ✅ Use simId directly if provided
+    if (simId) {
+      sim = { _id: simId };
+    } else {
+      sim = await Sim.findOne({
+        device: deviceId,
+        port: parseInt(port),
+        slot: parseInt(slot)
+      }).select("_id port slot phoneNumber");
+    }
+
     if (!sim) {
       return res.status(404).json({ code: 404, reason: "SIM not found" });
     }
 
-    // Get messages for this conversation
+    // ✅ Use contactId directly if provided
+    if (contactId) {
+      contact = { _id: contactId };
+    } else {
+      contact = await Contact.findOne({
+        user: req.user._id,
+        phoneNumber
+      }).select("_id name phoneNumber");
+    }
+
+    if (!contact) {
+      return res.status(404).json({ code: 404, reason: "Contact not found" });
+    }
+
+    // ✅ Fetch all messages for this SIM + Contact
     const messages = await SimMessages.find({
       sim: sim._id,
-      from: phoneNumber
+      contact: contact._id
     })
-    .sort({ timestamp: 1 })
-    .populate("sim")
-    .populate("contact");
+      .sort({ timestamp: 1 })
+      .populate("sim")
+      .populate("contact");
 
-    // Mark all messages as read
+    // ✅ Mark unread messages as read
     await SimMessages.updateMany(
-      { 
-        sim: sim._id, 
-        from: phoneNumber,
-        read: false 
+      {
+        sim: sim._id,
+        contact: contact._id,
+        read: false
       },
       { read: true }
     );
 
     res.json({
       code: 200,
-      data: { messages }
+      data: { messages, sim, contact }
     });
   } catch (err) {
     console.error("Fetch Conversation Error:", err);
@@ -184,10 +206,12 @@ exports.getConversationMessages = async (req, res) => {
   }
 };
 
+
+// ================== Send SMS ==================
 // ================== Send SMS ==================
 exports.sendSMS = async (req, res) => {
   try {
-    const { deviceId, port, slot, to, sms, userId } = req.body;
+    const { deviceId, port, slot, to, sms, userId,contactId } = req.body;
 
     if (!deviceId || !port || !slot || !to || !sms) {
       return res.status(400).json({ 
@@ -214,7 +238,12 @@ exports.sendSMS = async (req, res) => {
     }
 
     // Find or create contact for recipient
-    const contact = await findOrCreateContact(to, userId || (device.user ? device.user.toString() : null));
+    let contact 
+    if(!contactId) {
+      contact  = await findOrCreateContact(to, userId || (device.user ? device.user.toString() : null));
+    }else {
+      contact = { _id : contactId }
+    }
 
     // Save the outgoing message to database with contact reference
     const message = await SimMessages.create({
@@ -226,7 +255,7 @@ exports.sendSMS = async (req, res) => {
       sms: sms,
       rawSms: Buffer.from(sms).toString('base64'),
       isReport: false,
-      read: true,
+      read: true, // Outbound messages are marked as read by default
       direction: 'outbound',
       status: 'sent' // Set initial status as 'sent'
     });
@@ -253,6 +282,8 @@ exports.sendSMS = async (req, res) => {
 
 // ================== Create SMS ==================
 exports.createSms = async (req, res) => {
+
+  console.log("createSms",req.body)
   try {
     const { simId, from, to, sms, isReport = false, rawSms, userId } = req.body;
 
@@ -594,26 +625,27 @@ exports.webhookSMS = async (req, res) => {
         );
 
         const contactList = await ContactList.findOne({ _id: contact.contactList});
-
-        // 🔹 Recount opted-in/out totals after update
-        const [counts] = await Contact.aggregate([
-          { $match: { contactList: contactList._id } },
-          {
-            $group: {
-              _id: null,
-              totalContacts: { $sum: 1 },
-              optedInCount: { $sum: { $cond: ['$optedIn', 1, 0] } },
-              optedOutCount: { $sum: { $cond: ['$optedIn', 0, 1] } }
+        if(contactList) {
+          // 🔹 Recount opted-in/out totals after update
+          const [counts] = await Contact.aggregate([
+            { $match: { contactList: contactList._id } },
+            {
+              $group: {
+                _id: null,
+                totalContacts: { $sum: 1 },
+                optedInCount: { $sum: { $cond: ['$optedIn', 1, 0] } },
+                optedOutCount: { $sum: { $cond: ['$optedIn', 0, 1] } }
+              }
             }
-          }
-        ]);
+          ]);
 
-        // 🔹 Update list counts
-        await ContactList.findByIdAndUpdate(contactList._id, {
-          totalContacts: counts?.totalContacts || 0,
-          optedInCount: counts?.optedInCount || 0,
-          optedOutCount: counts?.optedOutCount || 0
-        });
+          // 🔹 Update list counts
+          await ContactList.findByIdAndUpdate(contactList._id, {
+            totalContacts: counts?.totalContacts || 0,
+            optedInCount: counts?.optedInCount || 0,
+            optedOutCount: counts?.optedOutCount || 0
+          });
+        }
       
         // Create spam report message
         const reportMessage = await SimMessages.create({

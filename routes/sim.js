@@ -2,6 +2,7 @@ const express = require("express");
 const router = express.Router();
 const simController = require("../controllers/simController");
 
+const { auth } = require('../middleware/auth');
 // GET all SIMs with optional filtering
 router.get("/", simController.getAllSims);
 

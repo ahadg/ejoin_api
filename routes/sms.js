@@ -18,7 +18,7 @@ router.post("/webhook", SimMessagesController.webhookSMS);
 
 router.post("/sync/:deviceId", auth, SimMessagesController.syncSms);
 
-router.get('/conversations', SimMessagesController.getConversations);
-router.get('/conversation', SimMessagesController.getConversationMessages);
+router.get('/conversations',auth, SimMessagesController.getConversations);
+router.get('/conversation',auth, SimMessagesController.getConversationMessages);
 
 module.exports = router;
