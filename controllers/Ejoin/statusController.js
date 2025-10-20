@@ -21,7 +21,7 @@ exports.getStatus = async (req, res) => {
     const params = {username, password};
     
     const data = await client.getStatus(params);
-    console.log("getStatus_data", data);
+    //console.log("getStatus_data", data);
     
     // Process device and SIM data in database
     if(data) {

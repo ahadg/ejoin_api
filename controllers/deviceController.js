@@ -48,7 +48,7 @@ exports.createDevice = async (req, res) => {
         name,
         ipAddress,
         location,
-        totalSlots,
+        totalSlots : data['max-ports'],
         dailyLimit,
         password,
         port,
@@ -59,8 +59,7 @@ exports.createDevice = async (req, res) => {
         maxSlots: data['max-slot'],
         firmwareVersion: data.ver,
         status: "online",
-        activeSlots: data['max-ports'],
-        //data.status.filter(port => port.inserted === 1 && port.slot_active === 1).length,
+        activeSlots: data.status.filter(port => port.inserted === 1 && port.slot_active === 1).length,
         lastSeen: new Date(),
         updatedAt: new Date()
         //...data

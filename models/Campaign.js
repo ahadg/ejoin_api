@@ -68,9 +68,9 @@ const campaignSchema = new mongoose.Schema({
   deliveryRate: { type: Number, default: 0 },
 
 
-sentCount: { type: Number, default: 0 },
-pausedAt: Date,
-resumedAt: Date,
+  sentCount: { type: Number, default: 0 },
+  pausedAt: Date,
+  resumedAt: Date,
   
   // Timestamps
   scheduledDate: { type: Date },

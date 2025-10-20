@@ -1,4 +1,3 @@
-// models/Sim.js
 const mongoose = require("mongoose");
 
 const ussdCommandSchema = new mongoose.Schema({
@@ -74,7 +73,8 @@ const simSchema = new mongoose.Schema({
     type: Boolean, 
     default: false 
   },
-  // NEW FIELDS FOR DAILY LIMIT
+  
+  // DAILY LIMIT FIELDS
   dailyLimit: { 
     type: Number, 
     default: 300 
@@ -91,6 +91,7 @@ const simSchema = new mongoose.Schema({
     type: Date, 
     default: Date.now 
   },
+  
   ussdCommands: [ussdCommandSchema],
   lastUpdated: { 
     type: Date, 
@@ -100,7 +101,43 @@ const simSchema = new mongoose.Schema({
   timestamps: true 
 });
 
-// Unique index for (device, port)
+// Compound index for unique device + port combination
 simSchema.index({ device: 1, port: 1 }, { unique: true });
+
+// Index for efficient querying
+simSchema.index({ status: 1 });
+simSchema.index({ inserted: 1 });
+simSchema.index({ device: 1 });
+simSchema.index({ operator: 1 });
+
+// Virtual for usage percentage
+simSchema.virtual('usagePercentage').get(function() {
+  return this.dailyLimit > 0 ? (this.todaySent / this.dailyLimit) * 100 : 0;
+});
+
+// Method to check if daily limit is exceeded
+simSchema.methods.isLimitExceeded = function() {
+  return this.todaySent >= this.dailyLimit;
+};
+
+// Method to increment today's sent count
+simSchema.methods.incrementSentCount = function() {
+  this.todaySent += 1;
+  this.lastUpdated = new Date();
+  return this.save();
+};
+
+// Static method to reset all daily usage
+simSchema.statics.resetAllDailyUsage = function() {
+  return this.updateMany(
+    {},
+    { 
+      $set: { 
+        todaySent: 0,
+        lastResetDate: new Date() 
+      } 
+    }
+  );
+};
 
 module.exports = mongoose.model("Sim", simSchema);
