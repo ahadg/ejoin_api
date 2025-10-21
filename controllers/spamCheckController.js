@@ -111,44 +111,44 @@ class SpamCheckController {
       messageCategory
     } = params;
 
-    return `You are an expert SMS spam analyst. Analyze the provided SMS message for spam indicators and provide a comprehensive assessment.
+    return `You are an expert SMS spam analyst. and spam optimization specialist and compliance specialist for Canada's Anti-Spam Legislation (CASL). Analyze the provided SMS message for spam indicators and provide a comprehensive assessment.
 
-COMPANY CONTEXT: ${companyName}
-MESSAGE CATEGORY: ${messageCategory}
+    COMPANY CONTEXT: ${companyName}
+    MESSAGE CATEGORY: ${messageCategory}
 
-ANALYSIS CRITERIA:
-1. **Spam Score (0-10)**: 0=Not spammy, 10=Very spammy
-2. **Spam Risk Level**: Low, Medium, High, Critical
-3. **Key Spam Indicators**: List specific elements that trigger spam filters
-4. **Compliance Issues**: Identify any legal or regulatory concerns
-5. **Carrier Filter Risk**: Likelihood of being blocked by mobile carriers
-6. **Recommendations**: Specific suggestions to reduce spam score
+    ANALYSIS CRITERIA:
+    1. **Spam Score (0-10)**: 0=Not spammy, 10=Very spammy
+    2. **Spam Risk Level**: Low, Medium, High, Critical
+    3. **Key Spam Indicators**: List specific elements that trigger spam filters
+    4. **Compliance Issues**: Identify any legal or regulatory concerns
+    5. **Carrier Filter Risk**: Likelihood of being blocked by mobile carriers
+    6. **Recommendations**: Specific suggestions to reduce spam score
 
-COMMON SPAM TRIGGERS TO CHECK:
-- Excessive use of capital letters
-- Too many emojis or special characters
-- Urgency language (ACT NOW!, LIMITED TIME!)
-- Financial incentives (FREE, WIN, PRIZE, CASH)
-- Suspicious links or URL shorteners
-- Missing unsubscribe mechanism
-- Misleading or deceptive content
-- Overly promotional language without value
+    COMMON SPAM TRIGGERS TO CHECK:
+    - Excessive use of capital letters
+    - Too many emojis or special characters
+    - Urgency language (ACT NOW!, LIMITED TIME!)
+    - Financial incentives (FREE, WIN, PRIZE, CASH)
+    - Suspicious links or URL shorteners
+    - Missing unsubscribe mechanism
+    - Misleading or deceptive content
+    - Overly promotional language without value
 
-OUTPUT FORMAT: Return ONLY a JSON object with this structure:
-{
-  "spamScore": number (0-10),
-  "riskLevel": "Low" | "Medium" | "High" | "Critical",
-  "characterCount": number,
-  "encoding": "GSM-7" | "UCS-2",
-  "segments": number,
-  "spamIndicators": string[],
-  "complianceIssues": string[],
-  "carrierFilterRisk": "Low" | "Medium" | "High",
-  "improvementSuggestions": string[],
-  "overallAssessment": string
-}
+    OUTPUT FORMAT: Return ONLY a JSON object with this structure:
+    {
+      "spamScore": number (0-10),
+      "riskLevel": "Low" | "Medium" | "High" | "Critical",
+      "characterCount": number,
+      "encoding": "GSM-7" | "UCS-2",
+      "segments": number,
+      "spamIndicators": string[],
+      "complianceIssues": string[],
+      "carrierFilterRisk": "Low" | "Medium" | "High",
+      "improvementSuggestions": string[],
+      "overallAssessment": string
+    }
 
-Return ONLY the JSON object, no other text.`;
+    Return ONLY the JSON object, no other text.`;
   };
 
   // Parse AI response for spam analysis

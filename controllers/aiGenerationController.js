@@ -210,13 +210,21 @@ class AIGenerationController {
   
   REQUIREMENTS:
   - Character limit: ${characterLimit} characters MAXIMUM
-  - Company name: ${companyName}
+  - Company name (legal sender name): ${companyName}
   - Unsubscribe text: "${unsubscribeText}" (include this in every variant)
   - Tones to use: ${tones.join(', ')}
   - Languages: ${languages.join(', ')}
   - Creativity level: ${creativityLevel}/1.0
   - Emojis: ${includeEmojis ? 'Include relevant emojis where appropriate' : 'Do not use emojis'}
-  ${customInstructions ? `- Custom instructions: ${customInstructions}` : ''}`;
+  ${customInstructions ? `- Custom instructions: ${customInstructions}` : ''}
+  
+  CASL COMPLIANCE (Canada’s Anti-Spam Legislation):
+  - Consent: Write messages suitable ONLY for recipients for whom valid consent exists (express or implied). Do not imply or manufacture consent. Avoid misleading/false claims.
+  - Identification (include in EVERY message): clearly identify the sender as "${companyName}" AND include a short postal mailing address and at least one contact method (email, phone, or website).
+    • If a mailing address/contact method is not provided in the user prompt, then dont add it".
+  - Unsubscribe mechanism: include a simple, no-cost opt-out that remains valid for at least 60 days and is actioned within 10 business days. Prefer keyword replies like "STOP" and "ARRET" (French) or a short link. Do not require any info beyond the recipient’s number.
+  - Transactional messages: Even if transactional, still include sender identification and an unsubscribe mechanism.
+  - Clarity: Use clear, truthful wording; no deceptive headers/content.`;
   
     // Add previous messages as reference context only
     if (previousMessages && previousMessages.length > 0) {
@@ -254,11 +262,13 @@ class AIGenerationController {
   7. Ensure tone matches the assigned tone category
   8. Make messages compelling and action-oriented
   9. Follow the ${category} message guidelines provided above
+  10. CASL checks (mandatory for Canada): include sender name + postal mailing address + contact method; provide a simple, functional opt-out ("Reply STOP/ARRET" or a short link) valid for 60 days; assume unsubscribes are processed within 10 business days; avoid misleading content.
   
   Return ONLY the JSON array, no other text.`;
   
     return systemPrompt;
   };
+  
 
   // Get category-specific guidance for AI
   getCategoryGuidance = (category) => {

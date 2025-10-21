@@ -3,6 +3,7 @@ const { auth } = require('../middleware/auth');
 const messageController = require('../controllers/messageController');
 const AIGenerationController = require('../controllers/aiGenerationController');
 const SpamCheckController = require('../controllers/spamCheckController'); 
+const messageOptimizationController = require('../controllers/messageOptimizationController');
 const router = express.Router();
 
 // Messages
@@ -19,5 +20,6 @@ router.get('/:id/variants', auth, messageController.getVariants);
 // New AI Generation routes
 router.post('/ai/generate', auth, AIGenerationController.generateVariants);
 router.post('/ai/check-spam', auth, SpamCheckController.checkSpamScore); 
-
+router.post('/ai/optimize', auth, messageOptimizationController.optimizeMessage); // Add this route
+router.post('/ai/optimize-batch', auth, messageOptimizationController.batchOptimize); // Optional batch route
 module.exports = router;
