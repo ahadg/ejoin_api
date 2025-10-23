@@ -53,6 +53,10 @@ class AIGenerationController {
         creativityLevel = 0.7,
         includeEmojis = false,
         companyName,
+        companyAddress,
+        companyEmail,
+        companyPhone,
+        companyWebsite,
         unsubscribeText,
         customInstructions = '',
         category = 'General' // Add category with default
@@ -87,7 +91,11 @@ class AIGenerationController {
         unsubscribeText: unsubscribeText || 'Reply STOP to unsubscribe',
         customInstructions,
         category,
-        previousMessages: []
+        previousMessages: [],
+        companyAddress,
+        companyEmail,
+        companyPhone,
+        companyWebsite,
       });
 
       res.json({
@@ -119,7 +127,11 @@ class AIGenerationController {
       unsubscribeText,
       customInstructions,
       category = 'General',
-      previousMessages = []
+      previousMessages = [],
+      companyAddress,
+      companyEmail,
+      companyPhone,
+      companyWebsite,
     } = params;
     
     console.log("generateWithGrok_params", {
@@ -139,6 +151,10 @@ class AIGenerationController {
       unsubscribeText,
       customInstructions,
       category,
+      companyAddress,
+      companyEmail,
+      companyPhone,
+      companyWebsite,
       previousMessages
     });
   
@@ -194,80 +210,99 @@ class AIGenerationController {
       creativityLevel,
       includeEmojis,
       companyName,
+      companyAddress,
+      companyEmail,
+      companyPhone,
+      companyWebsite,
       unsubscribeText,
       customInstructions,
       category = 'General',
       previousMessages = []
     } = params;
   
-    // Get category-specific guidance
     const categoryGuidance = this.getCategoryGuidance(category);
   
-    let systemPrompt = `You are an expert SMS copywriter. Generate ${variantCount} compelling SMS message variants based on the user's prompt.
+    const hasAddress = !!companyAddress;
+    const hasContact =
+      companyEmail || companyPhone || companyWebsite;
+  
+    let systemPrompt = `You are an expert SMS copywriter creating ${variantCount} CASL-compliant SMS variants for Canadian recipients.
   
   MESSAGE CATEGORY: ${category}
   ${categoryGuidance}
   
   REQUIREMENTS:
-  - Character limit: ${characterLimit} characters MAXIMUM
-  - Company name (legal sender name): ${companyName}
-  - Unsubscribe text: "${unsubscribeText}" (include this in every variant)
-  - Tones to use: ${tones.join(', ')}
+  - Max ${characterLimit} characters per message
+  - Include legal sender name: "${companyName}"
+  - Include unsubscribe text: "${unsubscribeText}"
+  - Tones: ${tones.join(', ')}
   - Languages: ${languages.join(', ')}
-  - Creativity level: ${creativityLevel}/1.0
-  - Emojis: ${includeEmojis ? 'Include relevant emojis where appropriate' : 'Do not use emojis'}
+  - Creativity level: ${creativityLevel}
+  - Emojis: ${includeEmojis ? 'Allowed' : 'Not allowed'}
   ${customInstructions ? `- Custom instructions: ${customInstructions}` : ''}
   
-  CASL COMPLIANCE (Canada’s Anti-Spam Legislation):
-  - Consent: Write messages suitable ONLY for recipients for whom valid consent exists (express or implied). Do not imply or manufacture consent. Avoid misleading/false claims.
-  - Identification (include in EVERY message): clearly identify the sender as "${companyName}" AND include a short postal mailing address and at least one contact method (email, phone, or website).
-    • If a mailing address/contact method is not provided in the user prompt, then dont add it".
-  - Unsubscribe mechanism: include a simple, no-cost opt-out that remains valid for at least 60 days and is actioned within 10 business days. Prefer keyword replies like "STOP" and "ARRET" (French) or a short link. Do not require any info beyond the recipient’s number.
-  - Transactional messages: Even if transactional, still include sender identification and an unsubscribe mechanism.
-  - Clarity: Use clear, truthful wording; no deceptive headers/content.`;
+  CANADA’S ANTI-SPAM LEGISLATION (CASL) REQUIREMENTS:
+  1. Only message recipients with **valid consent** (express or implied). Never invent or imply consent.
+  2. **Sender identification**: 
+     - Must clearly identify "${companyName}".
+     - ${
+       hasAddress
+         ? `Include the real postal mailing address: "${companyAddress}".`
+         : `If no mailing address provided, do NOT fabricate one.`
+     }
+     - ${
+       hasContact
+         ? `Contact method(s): ${[
+             companyEmail && `Email: ${companyEmail}`,
+             companyPhone && `Phone: ${companyPhone}`,
+             companyWebsite && `Website: ${companyWebsite}`,
+           ]
+             .filter(Boolean)
+             .join(', ')}.`
+         : `If no contact info provided, skip it and never make one up.`
+     }
+  3. **Unsubscribe mechanism**:
+     - Include simple, no-cost opt-out (e.g. "Reply STOP" or short link).
+     - Must be valid for 60 days and actioned within 10 business days.
+  4. **Transparency**: No false or misleading claims.
+  5. **Transactional messages**: Must still identify sender and include unsubscribe text.
+  6. If bilingual context, may include French equivalent for STOP ("ARRET").
   
-    // Add previous messages as reference context only
-    if (previousMessages && previousMessages.length > 0) {
-      systemPrompt += `
-  
-  PREVIOUS MESSAGES SENT IN THIS CAMPAIGN (for reference only):
-  ${previousMessages.map((msg, index) => `${index + 1}. "${msg}"`).join('\n')}
-  
-  CONTEXT GUIDANCE:
-  - Use the previous messages as inspiration for maintaining campaign consistency
-  - Feel free to create variations while keeping the core message intact
-  - Focus on creating effective messaging rather than strict uniqueness`;
+  OUTPUT FORMAT:
+  Return ONLY JSON array of variants:
+  [
+    {
+      "content": "...",
+      "tone": "...",
+      "language": "...",
+      "characterCount": ...,
+      "spamScore": ...,
+      "encoding": "...",
+      "cost": ...
     }
-  
-    systemPrompt += `
-  
-  OUTPUT FORMAT: Return ONLY a JSON array where each object has:
-  {
-    "content": "The actual SMS message text",
-    "tone": "One of the specified tones",
-    "language": "One of the specified languages",
-    "characterCount": number,
-    "spamScore": number between 0-5 (0=not spammy, 5=very spammy),
-    "encoding": "GSM-7" or "UCS-2",
-    "cost": number of SMS segments (1 or 2)
-  }
+  ]
   
   RULES:
-  1. Every message MUST include the unsubscribe text
-  2. Strictly respect the ${characterLimit} character limit
-  3. Calculate character count accurately
-  4. Assign appropriate spam scores based on common spam triggers
-  5. Use UCS-2 encoding if message contains emojis or non-GSM characters, otherwise GSM-7
-  6. Calculate cost: 1 segment for GSM-7 up to 160 chars, 2 segments beyond; 1 segment for UCS-2 up to 70 chars, 2 segments beyond
-  7. Ensure tone matches the assigned tone category
-  8. Make messages compelling and action-oriented
-  9. Follow the ${category} message guidelines provided above
-  10. CASL checks (mandatory for Canada): include sender name + postal mailing address + contact method; provide a simple, functional opt-out ("Reply STOP/ARRET" or a short link) valid for 60 days; assume unsubscribes are processed within 10 business days; avoid misleading content.
+  1. Must include unsubscribe text in every variant.
+  2. Never exceed ${characterLimit} characters.
+  3. Calculate character count accurately.
+  4. Apply correct encoding (UCS-2 for emojis, else GSM-7).
+  5. Assign realistic spam scores (0–5).
+  6. Respect CASL legal rules described above.
+  7. Be compelling, clear, and compliant.
+  `;
   
-  Return ONLY the JSON array, no other text.`;
+    // Include context messages (optional)
+    if (previousMessages?.length) {
+      systemPrompt += `
+  PREVIOUS MESSAGES CONTEXT:
+  ${previousMessages.map((msg, i) => `${i + 1}. "${msg}"`).join('\n')}
+  Use them as inspiration to maintain campaign consistency.`;
+    }
   
     return systemPrompt;
   };
+  
   
 
   // Get category-specific guidance for AI

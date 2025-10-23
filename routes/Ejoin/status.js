@@ -7,6 +7,8 @@ const statusController = require('../../controllers/Ejoin/statusController');
 router.get('/', statusController.getStatus);
 
 // POST /goip_get_status.html - Handle status notifications from devices
-router.post('/status_notification', statusController.statusNotification);
+router.post('/webhook', statusController.statusNotification);
+router.post('/set_status_report_server', statusController.setStatusReportServer);
+router.get('/get_status_report_server', statusController.getStatusReportServer);
 
 module.exports = router;

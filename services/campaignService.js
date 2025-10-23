@@ -70,7 +70,7 @@ class CampaignService {
   async getAvailableSims(deviceId, campaignId) {
     try {
       // Get all active SIMs for the device
-      console.log("deviceId",deviceId)
+      console.log("deviceId", deviceId)
       const sims = await Sim.find({
         device: deviceId,
         inserted: true,
@@ -118,42 +118,116 @@ class CampaignService {
     }
   }
 
-  // Get next SIM in circular order
-  async getNextSim(deviceId, campaignId) {
+  // Get SIM for contact (with affinity)
+  async getSimForContact(deviceId, campaignId, contact) {
     try {
+      // Check if contact already has an assigned SIM
+      if (contact.assignedSim?.simId) {
+        const assignedSim = await Sim.findById(contact.assignedSim.simId);
+        
+        // Verify the SIM is still available and within limits
+        if (assignedSim && 
+            assignedSim.device.toString() === deviceId.toString() &&
+            assignedSim.inserted && 
+            assignedSim.slotActive && 
+            assignedSim.status === 'active') {
+          
+          // Reset daily count if needed
+          //await this.resetSimDailyCountIfNeeded(assignedSim);
+          
+          // Check if SIM is within daily limits
+          if (assignedSim.dailySent < assignedSim.dailyLimit) {
+            console.log(`Using assigned SIM ${assignedSim._id} for contact ${contact.phoneNumber}`);
+            
+            // Update last used timestamp
+            await this.updateContactSimUsage(contact._id, assignedSim._id);
+            
+            return assignedSim;
+          } else {
+            console.log(`Assigned SIM ${assignedSim._id} reached daily limit for contact ${contact.phoneNumber}`);
+          }
+        } else {
+          console.log(`Assigned SIM not available for contact ${contact.phoneNumber}, finding new SIM`);
+        }
+      }
+      
+      // If no assigned SIM or assigned SIM is not available, get next available SIM
       const availableSims = await this.getAvailableSims(deviceId, campaignId);
       
-      // Initialize or get current index
+      if (availableSims.length === 0) {
+        throw new Error(`No available SIMs found for device ${deviceId}`);
+      }
+      
+      // Use round-robin to select a SIM
       if (!this.simRoundRobinIndex.has(campaignId)) {
         this.simRoundRobinIndex.set(campaignId, 0);
       }
       
       let currentIndex = this.simRoundRobinIndex.get(campaignId);
-      
-      // Find next available SIM (in case some reached limits)
+      let selectedSim = null;
       let attempts = 0;
-      while (attempts < availableSims.length) {
+      
+      while (attempts < availableSims.length && !selectedSim) {
         const sim = availableSims[currentIndex];
-        
-        // Check if this SIM is still available (might have been updated)
         const freshSim = await Sim.findById(sim._id);
+        
         if (freshSim && freshSim.dailySent < freshSim.dailyLimit) {
+          selectedSim = freshSim;
           // Update index for next call
           const nextIndex = (currentIndex + 1) % availableSims.length;
           this.simRoundRobinIndex.set(campaignId, nextIndex);
-          
-          return freshSim;
         }
         
-        // Move to next SIM
         currentIndex = (currentIndex + 1) % availableSims.length;
         attempts++;
       }
       
-      throw new Error('No available SIMs found within daily limits');
+      if (!selectedSim) {
+        throw new Error('No available SIMs found within daily limits');
+      }
+      
+      // Assign this SIM to the contact for future messages
+      await this.assignSimToContact(contact._id, selectedSim._id, deviceId);
+      console.log(`Assigned new SIM ${selectedSim._id} to contact ${contact.phoneNumber}`);
+      
+      return selectedSim;
+      
     } catch (error) {
-      console.error('Error getting next SIM:', error);
+      console.error('Error getting SIM for contact:', error);
       throw error;
+    }
+  }
+
+  // Assign SIM to contact
+  async assignSimToContact(contactId, simId, deviceId) {
+    try {
+      await Contact.findByIdAndUpdate(contactId, {
+        $set: {
+          'assignedSim': {
+            simId: simId,
+            deviceId: deviceId,
+            assignedAt: new Date(),
+            lastUsedAt: new Date()
+          }
+        }
+      });
+    } catch (error) {
+      console.error(`Error assigning SIM to contact ${contactId}:`, error);
+      throw error;
+    }
+  }
+
+  // Update SIM usage timestamp for contact
+  async updateContactSimUsage(contactId, simId) {
+    try {
+      await Contact.findByIdAndUpdate(contactId, {
+        $set: {
+          'assignedSim.lastUsedAt': new Date()
+        }
+      });
+    } catch (error) {
+      console.error(`Error updating SIM usage for contact ${contactId}:`, error);
+      // Don't throw - this shouldn't break the main flow
     }
   }
 
@@ -230,7 +304,7 @@ class CampaignService {
   }
 
   // Track message with comprehensive details
-  async trackMessageEvent(campaignId, contact, messageData, status, response = null, error = null, processingTime = null, simId = null,taskId) {
+  async trackMessageEvent(campaignId, contact, messageData, status, response = null, error = null, processingTime = null, simId = null, taskId = null) {
     try {
       const campaign = await Campaign.findById(campaignId)
         .populate('user')
@@ -291,7 +365,7 @@ class CampaignService {
       return;
     }
 
-    // Get available SIMs for the device
+    // Get available SIMs for the device (just for validation)
     let availableSims;
     try {
       availableSims = await this.getAvailableSims(campaign.device._id, campaignId);
@@ -306,11 +380,14 @@ class CampaignService {
       return;
     }
 
-    // Load opted-in contacts deterministically (sort by _id)
+    // Load opted-in contacts with their assigned SIM data
     let contacts = await Contact.find({
       contactList: campaign.contactList._id,
       optedIn: true
-    }).sort({ _id: 1 }).lean();
+    })
+    .populate('assignedSim.simId')
+    .sort({ _id: 1 })
+    .lean();
 
     if (!contacts || contacts.length === 0) {
       console.log(`No opted-in contacts for campaign ${campaignId}`);
@@ -358,16 +435,16 @@ class CampaignService {
         return;
       }
 
-      // Get next available SIM
+      // Get SIM for contact (with affinity)
       let sim;
       try {
-        sim = await this.getNextSim(campaign.device._id, campaignId);
+        sim = await this.getSimForContact(campaign.device._id, campaignId, contact);
       } catch (error) {
         console.error(`No available SIM found for campaign ${campaignId}:`, error);
         await this.pauseCampaign(campaignId, 'daily_limit_reached');
         return;
       }
-
+      console.log("SIM selected sim.port",sim.port.toString())
       // Check campaign daily limit
       const campaignDailySent = await this.getTodaySentCount(campaignId);
       if (campaign.taskSettings?.dailyMessageLimit && campaignDailySent >= campaign.taskSettings.dailyMessageLimit) {
@@ -575,7 +652,11 @@ class CampaignService {
           languages: campaign?.message?.settings?.get("languages"),
           creativityLevel: campaign?.message?.settings?.get("creativityLevel"),
           includeEmojis: campaign?.message?.settings?.get("includeEmojis"),
-          companyName: campaign?.message?.settings?.get("companyName") || 'Your company',
+          companyName: campaign?.message?.settings?.get("companyName") || '',
+          companyAddress : campaign?.message?.settings?.get("companyAddress") || '',
+          companyEmail : campaign?.message?.settings?.get("companyEmail") || '',
+          companyPhone : campaign?.message?.settings?.get("companyPhone") || '',
+          companyWebsite : campaign?.message?.settings?.get("companyWebsite") || '',
           unsubscribeText: campaign?.message?.settings?.get("unsubscribeText"),
           customInstructions: campaign?.message?.settings?.get("customInstructions"),
           category: campaign?.message?.category,
@@ -986,6 +1067,96 @@ class CampaignService {
     }
   }
 
+  // Get contact's assigned SIM information
+  async getContactSimInfo(contactId) {
+    try {
+      const contact = await Contact.findById(contactId)
+        .populate('assignedSim.simId')
+        .populate('assignedSim.deviceId');
+      
+      if (!contact || !contact.assignedSim) {
+        return null;
+      }
+
+      return {
+        sim: contact.assignedSim.simId,
+        device: contact.assignedSim.deviceId,
+        assignedAt: contact.assignedSim.assignedAt,
+        lastUsedAt: contact.assignedSim.lastUsedAt
+      };
+    } catch (error) {
+      console.error(`Error getting contact SIM info for ${contactId}:`, error);
+      return null;
+    }
+  }
+
+  // Reassign SIM to contact (manual override)
+  async reassignSimToContact(contactId, newSimId, deviceId) {
+    try {
+      await this.assignSimToContact(contactId, newSimId, deviceId);
+      console.log(`Manually reassigned SIM ${newSimId} to contact ${contactId}`);
+      return { success: true };
+    } catch (error) {
+      console.error(`Error reassigning SIM to contact ${contactId}:`, error);
+      throw error;
+    }
+  }
+
+  // Get campaign SIM usage statistics
+  async getCampaignSimUsage(campaignId) {
+    try {
+      const campaign = await Campaign.findById(campaignId).populate('contactList');
+      if (!campaign) {
+        throw new Error('Campaign not found');
+      }
+
+      // Get all contacts in this campaign with their assigned SIMs
+      const contacts = await Contact.find({
+        contactList: campaign.contactList._id
+      })
+      .populate('assignedSim.simId')
+      .select('phoneNumber assignedSim');
+
+      // Group by SIM
+      const simUsage = {};
+      let contactsWithSim = 0;
+      let contactsWithoutSim = 0;
+
+      contacts.forEach(contact => {
+        if (contact.assignedSim?.simId) {
+          const simId = contact.assignedSim.simId._id.toString();
+          if (!simUsage[simId]) {
+            simUsage[simId] = {
+              sim: contact.assignedSim.simId,
+              contactCount: 0,
+              contacts: []
+            };
+          }
+          simUsage[simId].contactCount++;
+          simUsage[simId].contacts.push({
+            phoneNumber: contact.phoneNumber,
+            assignedAt: contact.assignedSim.assignedAt,
+            lastUsedAt: contact.assignedSim.lastUsedAt
+          });
+          contactsWithSim++;
+        } else {
+          contactsWithoutSim++;
+        }
+      });
+
+      return {
+        campaignId,
+        campaignName: campaign.name,
+        totalContacts: contacts.length,
+        contactsWithSim,
+        contactsWithoutSim,
+        simUsage: Object.values(simUsage)
+      };
+    } catch (error) {
+      console.error(`Error getting campaign SIM usage for ${campaignId}:`, error);
+      throw error;
+    }
+  }
 }
 
 module.exports = new CampaignService();

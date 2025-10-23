@@ -46,14 +46,32 @@ class DeviceClient {
       throw new Error(`Device communication error: ${error.message}`);
     }
   }
+
+  async setStatusReportServer(config) {
+    console.log("config",config)
+    const response = await this.request('/set_status_report_server',{
+      enable: config.enable,
+      url: config.url,
+      period: config.period
+    },  'POST'
+    );
+    
+    return response;
+  }
+
+  async getStatusReportServer(config) {
+    const response = await this.request('/get_status_report_server',{},  'GET'
+    );
+    return response;
+  }
   
 
   // SMS methods - updated for new API structure
   async sendSms(tasks) {
     // The tasks array is sent as the request body
     console.log("sendSms called",tasks);
-    return this.request('/submit_sms_tasks', tasks, 'POST');
-    //return [ { id: 1086473958, code: 0, reason: 'OK' } ]
+    //return this.request('/submit_sms_tasks', tasks, 'POST');
+    return [ { id: 1086473958, code: 0, reason: 'OK' } ]
   }
 
   async pauseSms(ids) {

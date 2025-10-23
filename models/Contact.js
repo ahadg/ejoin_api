@@ -1,5 +1,5 @@
 const mongoose = require('mongoose');
-
+// models/Contact.js
 const contactSchema = new mongoose.Schema({
   user: {
     type: mongoose.Schema.Types.ObjectId,
@@ -9,16 +9,11 @@ const contactSchema = new mongoose.Schema({
   contactList: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'ContactList',
-    //required: true
   },
   phoneNumber: {
     type: String,
     required: true
   },
-  // countryCode: {
-  //   type: String,
-  //   default: '+1'
-  // },
   firstName: String,
   lastName: String,
   middleName: String,
@@ -47,13 +42,34 @@ const contactSchema = new mongoose.Schema({
     type: String,
     default: 'manual'
   },
-  importBatchId: String
+  importBatchId: String,
+  
+  // NEW: SIM affinity tracking
+  assignedSim: {
+    simId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Sim'
+    },
+    deviceId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Device'
+    },
+    assignedAt: {
+      type: Date,
+      default: Date.now
+    },
+    lastUsedAt: Date
+  }
 }, {
   timestamps: true
 });
 
 // Compound index for unique phone number per contact list
 contactSchema.index({ contactList: 1, phoneNumber: 1 }, { unique: true });
+
+// Index for SIM affinity queries
+contactSchema.index({ 'assignedSim.simId': 1 });
+contactSchema.index({ 'assignedSim.deviceId': 1 });
 
 // Update contact list counts when contacts change
 contactSchema.post('save', async function() {
