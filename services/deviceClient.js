@@ -70,8 +70,8 @@ class DeviceClient {
   async sendSms(tasks) {
     // The tasks array is sent as the request body
     console.log("sendSms called",tasks);
-    //return this.request('/submit_sms_tasks', tasks, 'POST');
-    return [ { id: 1086473958, code: 0, reason: 'OK' } ]
+    return this.request('/submit_sms_tasks', tasks, 'POST');
+    //return [ { id: 1086473958, code: 0, reason: 'OK' } ]
   }
 
   async pauseSms(ids) {
