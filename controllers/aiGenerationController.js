@@ -141,6 +141,7 @@ class AIGenerationController {
   
     // Construct the system prompt for Grok with category guidance
     const systemPrompt = this.buildSystemPrompt({
+      prompt,
       variantCount,
       characterLimit,
       tones,
@@ -203,6 +204,7 @@ class AIGenerationController {
   // Build comprehensive system prompt for Grok (updated with category guidance)
   buildSystemPrompt = (params) => {
     const {
+      prompt = "",
       variantCount,
       characterLimit,
       tones,
@@ -222,10 +224,7 @@ class AIGenerationController {
   
     const categoryGuidance = this.getCategoryGuidance(category);
   
-    const hasAddress = !!companyAddress;
-    const hasContact =
-      companyEmail || companyPhone || companyWebsite;
-  
+    // 🧠 Smart: Tell the AI to also infer company info from user prompt if missing
     let systemPrompt = `You are an expert SMS copywriter creating ${variantCount} CASL-compliant SMS variants for Canadian recipients.
   
   MESSAGE CATEGORY: ${category}
@@ -233,7 +232,7 @@ class AIGenerationController {
   
   REQUIREMENTS:
   - Max ${characterLimit} characters per message
-  - Include legal sender name: "${companyName}"
+  - Include legal sender name: "${companyName || 'Use the company name mentioned in the user prompt if available'}"
   - Include unsubscribe text: "${unsubscribeText}"
   - Tones: ${tones.join(', ')}
   - Languages: ${languages.join(', ')}
@@ -243,15 +242,19 @@ class AIGenerationController {
   
   CANADA’S ANTI-SPAM LEGISLATION (CASL) REQUIREMENTS:
   1. Only message recipients with **valid consent** (express or implied). Never invent or imply consent.
-  2. **Sender identification**: 
-     - Must clearly identify "${companyName}".
-     - ${
-       hasAddress
-         ? `Include the real postal mailing address: "${companyAddress}".`
-         : `If no mailing address provided, do NOT fabricate one.`
+  2. **Sender identification**:
+     - Must clearly identify the sender. ${
+       companyName
+         ? `Use "${companyName}".`
+         : `If no company name provided in parameters, infer it from the user's prompt if it’s mentioned.`
      }
      - ${
-       hasContact
+       companyAddress
+         ? `Include mailing address: "${companyAddress}".`
+         : `If no mailing address parameter provided, check if the prompt includes one.`
+     }
+     - ${
+       companyEmail || companyPhone || companyWebsite
          ? `Contact method(s): ${[
              companyEmail && `Email: ${companyEmail}`,
              companyPhone && `Phone: ${companyPhone}`,
@@ -259,14 +262,23 @@ class AIGenerationController {
            ]
              .filter(Boolean)
              .join(', ')}.`
-         : `If no contact info provided, skip it and never make one up.`
+         : `If no contact info parameters provided, use any contact info found in the prompt.`
      }
   3. **Unsubscribe mechanism**:
-     - Include simple, no-cost opt-out (e.g. "Reply STOP" or short link).
-     - Must be valid for 60 days and actioned within 10 business days.
+     - Include a simple opt-out (e.g., "Reply STOP").
   4. **Transparency**: No false or misleading claims.
   5. **Transactional messages**: Must still identify sender and include unsubscribe text.
   6. If bilingual context, may include French equivalent for STOP ("ARRET").
+
+  COMMON SPAM TRIGGERS:
+    - Excessive use of capital letters
+    - Too many emojis or special characters
+    - Urgency language (ACT NOW!, LIMITED TIME!)
+    - Financial incentives (FREE, WIN, PRIZE, CASH)
+    - Suspicious links or URL shorteners
+    - Missing unsubscribe mechanism
+    - Misleading or deceptive content
+    - Overly promotional language without value
   
   OUTPUT FORMAT:
   Return ONLY JSON array of variants:
@@ -290,9 +302,13 @@ class AIGenerationController {
   5. Assign realistic spam scores (0–5).
   6. Respect CASL legal rules described above.
   7. Be compelling, clear, and compliant.
-  `;
   
-    // Include context messages (optional)
+  USER PROMPT CONTEXT:
+  "${prompt}"
+  
+  If any company details (name, address, contact info) are missing from parameters,
+  you may safely use or reference those that appear naturally in the user's prompt text.`;
+  
     if (previousMessages?.length) {
       systemPrompt += `
   PREVIOUS MESSAGES CONTEXT:
@@ -302,6 +318,7 @@ class AIGenerationController {
   
     return systemPrompt;
   };
+  
   
   
 

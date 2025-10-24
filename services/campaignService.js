@@ -17,6 +17,7 @@ class CampaignService {
     this.workers = new Map();  // queueName -> Worker
     this.messageTracking = messageTrackingService; 
     this.simRoundRobinIndex = new Map(); // campaignId -> current SIM index
+    this.variantRoundRobinIndex = new Map(); // campaignId -> current variant index
     this.init();
   }
 
@@ -578,7 +579,7 @@ class CampaignService {
     return;
   }
 
-  // Generate message variant (AI or static)
+  // Generate message variant (AI or static) with round-robin for multiple variants
   async generateMessageVariant(campaignId, taskSettings, contact) {
     const campaign = await Campaign.findById(campaignId)
       .populate('message')
@@ -605,18 +606,34 @@ class CampaignService {
       };
     }
   
-    // Handle multiple_variants type - randomly select from message variants
+    // Handle multiple_variants type - use round-robin selection from message variants
     if (campaign?.taskSettings?.messageVariationType === 'multiple_variants') {
       if (campaign?.message?.variants && campaign.message.variants.length > 0) {
-        const randomVariant = campaign.message.variants[
-          Math.floor(Math.random() * campaign.message.variants.length)
-        ];
-        console.log("Selected random variant from multiple variants:", randomVariant._id);
+        // Initialize round-robin index for this campaign if not exists
+        if (!this.variantRoundRobinIndex.has(campaignId)) {
+          this.variantRoundRobinIndex.set(campaignId, 0);
+        }
+  
+        // Get current index and select variant
+        const currentIndex = this.variantRoundRobinIndex.get(campaignId);
+        const selectedVariant = campaign.message.variants[currentIndex];
+        
+        // Update index for next call (circular)
+        const nextIndex = (currentIndex + 1) % campaign.message.variants.length;
+        this.variantRoundRobinIndex.set(campaignId, nextIndex);
+  
+        console.log("Selected round-robin variant:", {
+          variantId: selectedVariant._id,
+          index: currentIndex,
+          totalVariants: campaign.message.variants.length,
+          nextIndex: nextIndex
+        });
+  
         return {
-          content: randomVariant.content,
-          variantId: randomVariant._id,
-          tone: randomVariant.tone || 'Professional',
-          characterCount: randomVariant.characterCount
+          content: selectedVariant.content,
+          variantId: selectedVariant._id,
+          tone: selectedVariant.tone || 'Professional',
+          characterCount: selectedVariant.characterCount
         };
       } else {
         console.log("No variants found, falling back to base message");
@@ -681,17 +698,25 @@ class CampaignService {
         // Fall through to fallback options
       }
   
-      // AI fallback: try message variants
+      // AI fallback: use round-robin for message variants if available
       if (campaign?.message?.variants && campaign.message.variants.length > 0) {
-        const randomVariant = campaign.message.variants[
-          Math.floor(Math.random() * campaign.message.variants.length)
-        ];
-        console.log("AI failed, using random variant as fallback");
+        // Initialize round-robin index for fallback
+        if (!this.variantRoundRobinIndex.has(campaignId)) {
+          this.variantRoundRobinIndex.set(campaignId, 0);
+        }
+  
+        const currentIndex = this.variantRoundRobinIndex.get(campaignId);
+        const selectedVariant = campaign.message.variants[currentIndex];
+        
+        const nextIndex = (currentIndex + 1) % campaign.message.variants.length;
+        this.variantRoundRobinIndex.set(campaignId, nextIndex);
+  
+        console.log("AI failed, using round-robin variant as fallback");
         return {
-          content: randomVariant.content,
-          variantId: randomVariant._id,
-          tone: randomVariant.tone || 'Professional',
-          characterCount: randomVariant.characterCount
+          content: selectedVariant.content,
+          variantId: selectedVariant._id,
+          tone: selectedVariant.tone || 'Professional',
+          characterCount: selectedVariant.characterCount
         };
       }
   
@@ -713,7 +738,7 @@ class CampaignService {
       tone: 'Professional',
       characterCount: (campaign?.messageContent || 'Default message').length
     };
-  }  
+  }
 
   // Check daily message limits
   async checkDailyLimit(campaignId, deviceId) {
@@ -882,8 +907,9 @@ class CampaignService {
       this.workers.delete(queueName);
     }
 
-    // Clear SIM round-robin index for this campaign
+    // Clear round-robin indices for this campaign
     this.simRoundRobinIndex.delete(campaignId);
+    this.variantRoundRobinIndex.delete(campaignId);
 
     console.log("campaign_stopped");
     
@@ -1156,6 +1182,14 @@ class CampaignService {
       console.error(`Error getting campaign SIM usage for ${campaignId}:`, error);
       throw error;
     }
+  }
+
+
+  // Reset variant round-robin index for a campaign
+  async resetVariantRoundRobin(campaignId) {
+    this.variantRoundRobinIndex.set(campaignId, 0);
+    console.log(`Reset variant round-robin index for campaign ${campaignId}`);
+    return { success: true };
   }
 }
 
