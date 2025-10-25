@@ -436,7 +436,7 @@ class CampaignService {
         return;
       }
 
-      // Get SIM for contact (with affinity)
+      // Get SIM for contact 
       let sim;
       try {
         sim = await this.getSimForContact(campaign.device._id, campaignId, contact);
@@ -447,12 +447,12 @@ class CampaignService {
       }
       console.log("SIM selected sim.port",sim.port.toString())
       // Check campaign daily limit
-      const campaignDailySent = await this.getTodaySentCount(campaignId);
-      if (campaign.taskSettings?.dailyMessageLimit && campaignDailySent >= campaign.taskSettings.dailyMessageLimit) {
-        console.log(`Campaign ${campaignId} reached campaign daily limit. Pausing.`);
-        await this.pauseCampaign(campaignId, 'daily_limit_reached');
-        return;
-      }
+      // const campaignDailySent = await this.getTodaySentCount(campaignId);
+      // if (campaign.taskSettings?.dailyMessageLimit && campaignDailySent >= campaign.taskSettings.dailyMessageLimit) {
+      //   console.log(`Campaign ${campaignId} reached campaign daily limit. Pausing.`);
+      //   await this.pauseCampaign(campaignId, 'daily_limit_reached');
+      //   return;
+      // }
 
       // Generate message variant
       const finalMessage = await this.generateMessageVariant(campaignId, campaign.taskSettings || {}, contact);
