@@ -116,9 +116,21 @@ exports.updateCampaign = async (req, res) => {
       messageContent, scheduledDate, priority, taskSettings
     } = req.body;
 
+    const contactListData = await ContactList.findOne({
+      _id: contactList,
+      user: req.user._id
+    });
+    if (!contactListData) {
+      return res.status(400).json({
+        code: 400,
+        reason: 'Contact list not found or access denied'
+      });
+    }
+
     const campaign = await Campaign.findOneAndUpdate(
       { _id: req.params.id, user: req.user._id },
       {
+        totalContacts : contactListData?.optedInCount,
         name, contactList, device, status, taskId,
         messageContent, scheduledDate, priority, taskSettings,
         updatedAt: new Date()
