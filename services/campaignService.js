@@ -483,7 +483,7 @@ class CampaignService {
 
         if (ejoinResponse?.[0]?.reason === "OK") {  
           // Update campaign stats and SIM counters
-          await this.updateCampaignStats(campaignId, { sentMessages: 1, lastSentAt: new Date() });
+          //await this.updateCampaignStats(campaignId, { sentMessages: 1, lastSentAt: new Date() });
           await this.updateSimDailyCount(sim._id);
 
           // Update device last seen
@@ -514,7 +514,7 @@ class CampaignService {
         } else {
           // Handle failure response
           console.error(`SMS send responded with error for campaign ${campaignId}`, ejoinResponse);
-          await this.updateCampaignStats(campaignId, { failedMessages: 1 });
+          //await this.updateCampaignStats(campaignId, { failedMessages: 1 });
 
           // Track failed message
           await this.trackMessageEvent(
@@ -536,7 +536,7 @@ class CampaignService {
       } catch (err) {
         const processingTime = Date.now() - processingStartTime;
         console.error(`Error sending SMS for campaign ${campaignId} to ${contact.phoneNumber}:`, err);
-        await this.updateCampaignStats(campaignId, { failedMessages: 1 });
+        //await this.updateCampaignStats(campaignId, { failedMessages: 1 });
 
         // Track errored message
         await this.trackMessageEvent(
@@ -927,24 +927,24 @@ class CampaignService {
   }
 
   // Update campaign stats (incremental updates)
-  async updateCampaignStats(campaignId, updates) {
-    const updateData = {
-      $inc: updates,
-      $set: { updatedAt: new Date() }
-    };
+  // async updateCampaignStats(campaignId, updates) {
+  //   const updateData = {
+  //     $inc: updates,
+  //     $set: { updatedAt: new Date() }
+  //   };
 
-    if (updates.sentMessages) {
-      updateData.$inc.sentMessagesToday = updates.sentMessages;
-      updateData.$inc.deliveredMessages = updates.sentMessages;
-    }
+  //   if (updates.sentMessages) {
+  //     updateData.$inc.sentMessagesToday = updates.sentMessages;
+  //     updateData.$inc.deliveredMessages = updates.sentMessages;
+  //   }
 
-    // Also increment sentCount for progress tracking if sentMessages present
-    if (!updateData.$inc.sentCount && updates.sentMessages) {
-      updateData.$inc.sentCount = updates.sentMessages;
-    }
+  //   // Also increment sentCount for progress tracking if sentMessages present
+  //   if (!updateData.$inc.sentCount && updates.sentMessages) {
+  //     updateData.$inc.sentCount = updates.sentMessages;
+  //   }
 
-    await Campaign.findByIdAndUpdate(campaignId, updateData);
-  }
+  //   await Campaign.findByIdAndUpdate(campaignId, updateData);
+  // }
 
   // Update SIM daily count
   async updateSimDailyCount(simId) {

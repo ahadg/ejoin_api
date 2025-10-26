@@ -1,6 +1,5 @@
 // models/MessageSentDetails.js
 const mongoose = require('mongoose');
-
 const messageSentdetailschema = new mongoose.Schema({
   // References
   campaign: { 
@@ -109,7 +108,12 @@ const messageSentdetailschema = new mongoose.Schema({
     stackTrace: { type: String },
     recoverable: { type: Boolean, default: false }
   },
-  
+  taskId: {
+    type : String
+  },
+  taskUpdates : {
+    type : Object
+  },
   // Device Information
   deviceName: { type: String },
   deviceSignal: { type: Number },
@@ -134,7 +138,7 @@ messageSentdetailschema.index({ campaign: 1, status: 1 });
 messageSentdetailschema.index({ user: 1, createdAt: -1 });
 messageSentdetailschema.index({ phoneNumber: 1, createdAt: -1 });
 messageSentdetailschema.index({ createdAt: -1 });
-//messageSentdetailschema.index({ sentAt: -1 });
+messageSentdetailschema.index({ taskId: -1 });
 messageSentdetailschema.index({ 'statusHistory.timestamp': -1 });
 
 // Pre-save middleware to generate content hash

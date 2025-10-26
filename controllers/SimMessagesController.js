@@ -516,6 +516,39 @@ const getUserOnlineStatus = (io, userId, messageData) => {
   };
 };
 
+/**
+ * 🔁 Recalculate and update contact list counts
+ * @param {ObjectId | string} contactListId
+ */
+async function updateContactListCounts(contactListId) {
+  if (!contactListId) return;
+
+  try {
+    const [counts] = await Contact.aggregate([
+      { $match: { contactList: contactListId } },
+      {
+        $group: {
+          _id: null,
+          totalContacts: { $sum: 1 },
+          optedInCount: { $sum: { $cond: ['$optedIn', 1, 0] } },
+          optedOutCount: { $sum: { $cond: ['$optedIn', 0, 1] } }
+        }
+      }
+    ]);
+
+    await ContactList.findByIdAndUpdate(contactListId, {
+      totalContacts: counts?.totalContacts || 0,
+      optedInCount: counts?.optedInCount || 0,
+      optedOutCount: counts?.optedOutCount || 0
+    });
+
+    console.log(`📊 ContactList counts updated for list: ${contactListId}`);
+  } catch (err) {
+    console.error(`⚠️ Failed to update contact list counts: ${contactListId}`, err.message);
+  }
+}
+
+
 // Main webhook handler - FIXED VERSION
 exports.webhookSMS = async (req, res) => {
   try {
@@ -625,27 +658,7 @@ exports.webhookSMS = async (req, res) => {
         );
 
         const contactList = await ContactList.findOne({ _id: contact.contactList});
-        if(contactList) {
-          // 🔹 Recount opted-in/out totals after update
-          const [counts] = await Contact.aggregate([
-            { $match: { contactList: contactList._id } },
-            {
-              $group: {
-                _id: null,
-                totalContacts: { $sum: 1 },
-                optedInCount: { $sum: { $cond: ['$optedIn', 1, 0] } },
-                optedOutCount: { $sum: { $cond: ['$optedIn', 0, 1] } }
-              }
-            }
-          ]);
-
-          // 🔹 Update list counts
-          await ContactList.findByIdAndUpdate(contactList._id, {
-            totalContacts: counts?.totalContacts || 0,
-            optedInCount: counts?.optedInCount || 0,
-            optedOutCount: counts?.optedOutCount || 0
-          });
-        }
+        updateContactListCounts(contactList._id)
       
         // Create spam report message
         const reportMessage = await SimMessages.create({
@@ -758,7 +771,7 @@ exports.webhookSMS = async (req, res) => {
 
       // 🔹 Handle STOP message
       if (isStopMessage && from) {
-        await Contact.findOneAndUpdate(
+        const updatedContact = await Contact.findOneAndUpdate(
           { phoneNumber: from },
           {
             $set: {
@@ -770,9 +783,13 @@ exports.webhookSMS = async (req, res) => {
           },
           { new: true }
         );
-
+      
         console.log(`🛑 STOP message processed from ${from}`);
-      }
+      
+        if (updatedContact?.contactList) {
+          await updateContactListCounts(updatedContact.contactList);
+        }
+      }      
 
       // 🔹 Emit real-time message if user is online
       if (isUserOnline) {

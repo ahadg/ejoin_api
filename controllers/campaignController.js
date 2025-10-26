@@ -3,6 +3,8 @@ const ContactList = require('../models/ContactList');
 const CampaignStats = require("../models/campaignStats");
 const { createAndEmitNotification } = require('./notificationController');
 const CampaignService = require('../services/campaignService');
+const MessageSentDetails = require('../models/MessageSentDetails');
+const messageTrackingService = require('../services/messageTrackingService');
 
 // Get all campaigns for user
 exports.getCampaigns = async (req, res) => {
@@ -303,6 +305,7 @@ exports.stopCampaign = async (req, res) => {
 };
 
 // Webhook handler for SMS status updates
+// Webhook handler for SMS status updates
 exports.smsStatusWebhook = async (req, res) => {
   try {
     const { type, statuses } = req.body;
@@ -321,142 +324,116 @@ exports.smsStatusWebhook = async (req, res) => {
     today.setUTCHours(0, 0, 0, 0);
 
     const updatePromises = statuses.map(async (status) => {
-      const { tid, sent = 0, failed = 0, unsent = 0, sdr = [] } = status;
+      const { tid, sent = 0, failed = 0, unsent = 0, sdr = [], fdr = [] } = status;
 
-      // Find campaign by taskId
-      const campaign = await Campaign.findOne({ taskId: tid }).populate("user");
-      if (!campaign) return null;
+      // Process successful deliveries (sdr)
+      const deliveryPromises = sdr.map(async (delivery) => {
+        try {
+          const { number, ts, code } = delivery;
+          
+          // Find the message by phone number and taskId
+          const messageDetail = await MessageSentDetails.findOne({
+            taskId: tid.toString(),
+            //phoneNumber: number
+          });
 
-      const deliveredMessages = sdr.length;
-      const totalProcessingTime = sdr.reduce((sum, report) => sum + (report.cost || 0), 0);
-      const completedMessages = sent + failed + unsent;
-
-      // Calculate average processing time (avoid division by zero)
-      const averageProcessingTime = deliveredMessages > 0 
-        ? totalProcessingTime / deliveredMessages 
-        : 0;
-
-      const progress =
-        campaign.totalContacts > 0
-          ? Math.min(100, (completedMessages / campaign.totalContacts) * 100)
-          : 0;
-
-      let updateData = {
-        $inc: {
-          deliveredMessages: deliveredMessages, // accumulate deliveries
-          failedMessages: failed,                // accumulate failures
-          completedMessages: completedMessages,  // optional if tracking per batch
-        },
-        $set: {
-          sentMessages: sent,                   
-          updatedAt: new Date(),
-          progress,
-          averageProcessingTime
-        },        
-      };
-
-      if (campaign.status != "completed" && sent >= campaign.totalContacts) {
-        updateData.$set.status = "completed";
-        updateData.$set.completedAt = new Date();
-      }
-
-      const updatedCampaign = await Campaign.findOneAndUpdate(
-        { _id: campaign._id },
-        updateData,
-        { new: true }
-      ).populate("user");
-
-      // -------- Update or create CampaignStats --------
-      const statsDate = new Date();
-      statsDate.setUTCHours(0, 0, 0, 0);
-
-      let campaignStats = await CampaignStats.findOne({
-        campaign: campaign._id,
-        user: campaign.user._id,
-        date: statsDate,
+          if (messageDetail) {
+            // Update message status to delivered
+            await messageTrackingService.updateMessageStatus(
+              messageDetail.messageId,
+              'delivered',
+              'webhook_delivery_report',
+              {
+                timestamp: new Date(ts * 1000), // Convert Unix timestamp to Date
+                code: code,
+                deliveryData: delivery
+              }
+            );
+            return { success: true, messageId: messageDetail.messageId, status: 'delivered' };
+          }
+          return { success: false, reason: 'message_not_found', number };
+        } catch (error) {
+          console.error(`Error processing delivery for number ${delivery.number}:`, error);
+          return { success: false, reason: 'error', error: error.message, number: delivery.number };
+        }
       });
 
-      if (!campaignStats) {
-        // Create a new stats record for the new date
-        campaignStats = await CampaignStats.create({
-          campaign: campaign._id,
-          user: campaign.user._id,
-          date: statsDate,
-          sentMessages: sent,
-          deliveredMessages,
-          failedMessages: failed,
-          averageProcessingTime, // ✅ Store average processing time
-        });
-      } else {
-        // For existing stats, calculate new average
-        const totalMessages = campaignStats.deliveredMessages + deliveredMessages;
-        const newAverage = totalMessages > 0 
-          ? ((campaignStats.averageProcessingTime * campaignStats.deliveredMessages) + totalProcessingTime) / totalMessages
-          : averageProcessingTime;
+      // Process failures (fdr)
+      const failurePromises = fdr.map(async (failure) => {
+        try {
+          const { number, ts, code, gsm_cause } = failure;
+          
+          // Find the message by phone number and taskId
+          const messageDetail = await MessageSentDetails.findOne({
+            taskId: tid.toString(),
+            //phoneNumber: number
+          });
 
-        await CampaignStats.updateOne(
-          { _id: campaignStats._id },
-          {
-            $inc: {
-              deliveredMessages,
-              failedMessages: failed,
-            },
-            $set: {
-              sentMessages: sent,
-              averageProcessingTime: newAverage // ✅ Update with new average
-            }
+          if (messageDetail) {
+            // Update message status to failed
+            await messageTrackingService.updateMessageStatus(
+              messageDetail.messageId,
+              'failed',
+              'webhook_failure_report',
+              {
+                timestamp: new Date(ts * 1000), // Convert Unix timestamp to Date
+                code: code,
+                gsmCause: gsm_cause,
+                failureData: failure
+              }
+            );
+            return { success: true, messageId: messageDetail.messageId, status: 'failed' };
           }
-        );
-      }
+          return { success: false, reason: 'message_not_found', number };
+        } catch (error) {
+          console.error(`Error processing failure for number ${failure.number}:`, error);
+          return { success: false, reason: 'error', error: error.message, number: failure.number };
+        }
+      });
 
-      // -------- Create Notification --------
-      let notificationData = {};
-      
-      if (campaign.status != "completed" && sent >= campaign.totalContacts) {
-        notificationData = {
-          user: campaign.user._id,
-          title: 'Campaign Completed',
-          message: `Campaign "${campaign.name}" has been completed successfully. Sent: ${sent}, Delivered: ${deliveredMessages}, Failed: ${failed}`,
-          type: 'success',
-          priority: 'medium',
-          data: {
-            campaignId: campaign._id,
-            campaignName: campaign.name,
-            sent,
-            delivered: deliveredMessages,
-            failed,
-            averageProcessingTime: Math.round(averageProcessingTime * 100) / 100 // ✅ Rounded to 2 decimal places
-          },
-          relatedEntity: {
-            type: 'campaign',
-            entityId: campaign._id
-          }
-        };
-      } 
+      // Process sent messages that don't have delivery reports yet
+      // const sentMessagesUpdate = async () => {
+      //   try {
+      //     // Find all pending messages for this task that haven't been updated yet
+      //     const pendingMessages = await MessageSentDetails.find({
+      //       taskId: tid.toString(),
+      //       status: 'pending'
+      //     }).limit(sent); // Limit to the number reported as sent
 
-      // Create and emit notification if we have notification data
-      if (Object.keys(notificationData).length > 0) {
-        await createAndEmitNotification(io, notificationData);
-      }
+      //     const updatePromises = pendingMessages.map(async (message) => {
+      //       await messageTrackingService.updateMessageStatus(
+      //         message.messageId,
+      //         'sent',
+      //         'webhook_sent_confirmation'
+      //       );
+      //       return { success: true, messageId: message.messageId, status: 'sent' };
+      //     });
 
-      // -------- Real-time updates --------
-      if (io && updatedCampaign.user) {
-        io.to(`user:${updatedCampaign.user._id}`).emit("campaign-update", {
-          campaignId: updatedCampaign._id,
-          campaignName: updatedCampaign.name,
-          updates: {
-            sentMessages: updatedCampaign.sentMessages,
-            deliveredMessages: updatedCampaign.deliveredMessages,
-            failedMessages: updatedCampaign.failedMessages,
-            progress: updatedCampaign.progress,
-            status: updatedCampaign.status,
-            averageProcessingTime: updatedCampaign.averageProcessingTime, // ✅ Updated field name
-            updatedAt: updatedCampaign.updatedAt,
-          },
-        });
-      }
+      //     return await Promise.all(updatePromises);
+      //   } catch (error) {
+      //     console.error('Error updating sent messages:', error);
+      //     return [];
+      //   }
+      // };
 
-      return updatedCampaign;
+      // Execute all updates
+      const [deliveryResults, failureResults, 
+        //sentResults
+
+      ] = await Promise.all([
+        Promise.all(deliveryPromises),
+        Promise.all(failurePromises),
+        //sentMessagesUpdate()
+      ]);
+
+
+      return {
+        taskId: tid,
+        messageResults: {
+          deliveries: deliveryResults,
+          failures: failureResults,
+        }
+      };
     });
 
     const results = await Promise.all(updatePromises);
@@ -465,10 +442,16 @@ exports.smsStatusWebhook = async (req, res) => {
     res.json({
       code: 200,
       message: `Processed ${successful} status updates`,
-      data: { processed: successful, failed: results.length - successful },
+      data: {
+        processed: successful,
+        failed: results.length - successful,
+        details: results.filter(Boolean)
+      },
     });
   } catch (err) {
     console.error("Webhook error:", err);
     res.status(500).json({ code: 500, reason: "Error processing webhook" });
   }
 };
+
+

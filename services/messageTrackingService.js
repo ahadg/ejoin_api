@@ -96,17 +96,6 @@ class MessageTrackingService {
    */
   async updateCampaignStatsCounters(campaignId, campaignStatsId, newStatus, oldStatus = null) {
     const updateQuery = {};
-    
-    // Decrement old status counter if provided
-    // if (oldStatus) {
-    //   switch (oldStatus) {
-    //     case 'sent': updateQuery.$inc = { sentMessages: -1 }; break;
-    //     case 'delivered': updateQuery.$inc = { deliveredMessages: -1 }; break;
-    //     case 'failed': updateQuery.$inc = { failedMessages: -1 }; break;
-    //     case 'read': updateQuery.$inc = { readMessages: -1 }; break;
-    //     case 'pending': updateQuery.$inc = { pendingMessages: -1 }; break;
-    //   }
-    // }
 
     // Increment new status counter
     if (!updateQuery.$inc) updateQuery.$inc = {};
@@ -114,7 +103,7 @@ class MessageTrackingService {
     switch (newStatus) {
       case 'sent':
         updateQuery.$inc.sentMessages = 1;
-        updateQuery.$inc.deliveredMessages = 1; // also increment delivered
+        //updateQuery.$inc.deliveredMessages = 1; // also increment delivered
         break;
     
       case 'delivered':
@@ -137,12 +126,15 @@ class MessageTrackingService {
     await CampaignStats.findByIdAndUpdate(campaignStatsId, updateQuery);
     
     // Also update main campaign counters
-    const campaignUpdate = {};
+    const campaignUpdate = {$set : { updatedAt: new Date() }};
     switch (newStatus) {
       case 'sent': 
-        campaignUpdate.$inc = { sentMessages: 1 };
-        campaignUpdate.$inc = { deliveredMessages: 1 };
-        campaignUpdate.$inc = { sentCount: 1 };
+        campaignUpdate.$inc = {
+          sentMessages : 1,
+          sentMessagesToday : 1,
+          sentCount : 1
+        }
+        //campaignUpdate.$inc.deliveredMessages = 1 
         break;
       case 'delivered': 
         campaignUpdate.$inc = { deliveredMessages: 1 };
@@ -152,9 +144,10 @@ class MessageTrackingService {
         break;
     }
 
-    // if (campaignUpdate.$inc) {
-    //   await Campaign.findByIdAndUpdate(campaignId, campaignUpdate);
-    // }
+    if (campaignUpdate.$inc) {
+      console.log("campaignUpdate",campaignUpdate)
+      await Campaign.findByIdAndUpdate(campaignId, campaignUpdate);
+    }
   }
 
   /**
