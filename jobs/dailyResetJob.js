@@ -2,6 +2,9 @@
 const cron = require('node-cron');
 const CampaignService = require('../services/campaignService');
 
+console.log('🕐 Daily reset cron job initialized...');
+
+
 // Run every day at midnight Toronto (Eastern) time
 cron.schedule(
   '0 0 * * *',
@@ -18,3 +21,5 @@ cron.schedule(
     timezone: 'America/Toronto', // Canadian Eastern Time
   }
 );
+
+

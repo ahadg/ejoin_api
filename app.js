@@ -273,6 +273,9 @@ const gracefulShutdown = async () => {
   }
 };
 
+require('./jobs/dailyResetJob');
+
+
 // Handle shutdown signals
 process.on('SIGINT', gracefulShutdown);
 process.on('SIGTERM', gracefulShutdown);

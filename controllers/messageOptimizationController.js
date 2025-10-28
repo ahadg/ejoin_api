@@ -117,46 +117,127 @@ class MessageOptimizationController {
   };
 
   // Build system prompt for message optimization
-  buildOptimizationPrompt = (params) => {
-    const {
-      companyName,
-      messageCategory,
-      targetSpamScore,
-      preserveIntent,
-      includeUnsubscribe
-    } = params;
+  // Build a CASL-safe optimization prompt for an LLM
+// Backward-compatible signature; extra params have defaults.
+ buildOptimizationPrompt = (params) => {
+  const {
+    companyName,
+    messageCategory,
+    targetSpamScore,
+    preserveIntent,
+    includeUnsubscribe,
+    // NEW optional params:
+    characterLimit = 320,            // overall sanity cap (not forcing 1 segment)
+    singleSegmentTarget = true,      // encourage ≤160 GSM-7 or ≤70 UCS-2
+    languages = ["English"],         // affects STOP/ARRET expectation
+    allowedLinkDomain,               // e.g., "example.com"
+    maxLinksPerMessage = 1,          // cap links
+    strictBilingualStop = true,      // add ARRET if French present
+    includeEmojis = false            // hints for UCS-2 expectations
+  } = params;
 
-    return `You are an expert SMS copywriter and spam optimization specialist and compliance specialist for Canada's Anti-Spam Legislation (CASL). Optimize the provided SMS message to reduce spam score while maintaining effectiveness.
+  const forbiddenBanks = [
+    // Financial / too-good-to-be-true
+    "Free money","Earn cash fast","Make money now","Instant profit","Get paid today",
+    "Double your income","Risk-free investment","100% guaranteed","Increase sales instantly","Financial freedom",
+    // Aggressive promo/hype
+    "Free!!!","Act now!","Limited time offer","Click here","Buy now","Order today","Don’t miss out",
+    "Call now","Exclusive deal","Best price","Lowest rate","Offer expires soon","Save big",
+    // Prizes/rewards
+    "Congratulations","You’ve won","Claim your prize","Get your gift card","Reward points","Winner",
+    "Instant reward","Special bonus",
+    // Tech/phishing
+    "Verify your account","Update your information","Confirm your password","Login now",
+    "Security alert","Suspicious activity","Urgent: account suspended",
+    // Health/adult
+    "Lose weight fast","Viagra","Cialis","ED","Detox","miracle cure","Enhance performance","Adult content","18+",
+    // URL shorteners
+    "bit.ly","tinyurl","goo.gl","t.co","ow.ly","is.gd"
+  ];
 
-COMPANY: ${companyName}
-CATEGORY: ${messageCategory}
+  const safeWordPairs = [
+    ["Free", "Complimentary / On us"],
+    ["Buy now", "Shop today / Explore"],
+    ["Limited time offer", "Special offer / Seasonal deal"],
+    ["Click here", "Learn more / Visit our site"],
+    ["Act now", "Join today / Get started"],
+    ["Earn money fast", "Grow your income"],
+    ["Get paid today", "Payment available"],
+    ["100% guaranteed", "Proven results / Trusted by many"],
+    ["Risk-free", "No obligation"],
+    ["Best price", "Great value / Affordable"],
+    ["Winner / You’ve won", "You may qualify / You’re selected"],
+    ["Claim your prize", "Redeem your reward"],
+    ["Verify your account", "Confirm your details securely"],
+    ["Update your information", "Manage your profile / Review details"],
+    ["Urgent", "Quick response appreciated"],
+    ["Password / Login now", "Sign in securely"],
+    ["Cash", "Credit / Benefit"],
+    ["Instant", "Begin now / Start instantly"],
+    ["Cheap", "Low-cost / Affordable"],
+    ["Discount code", "Promo code / Offer code"],
+    ["Refund", "Request assistance / Support available"],
+    ["Investment opportunity", "Partnership / Business opportunity"],
+    ["Trial / Free trial", "Demo / Preview"]
+  ];
+
+  const bilingualNote = strictBilingualStop
+    ? `If French is used or audience is bilingual, include ARRET alongside STOP.`
+    : `Include ARRET only when French is explicitly used.`;
+
+  const linkPolicy = allowedLinkDomain
+    ? `Use ≤ ${maxLinksPerMessage} link and ONLY branded domain: ${allowedLinkDomain}. No URL shorteners.`
+    : `Use ≤ ${maxLinksPerMessage} link. Avoid URL shorteners and suspicious redirects.`;
+
+  return `You are an expert SMS copywriter, spam optimization specialist, and CASL (Canada) compliance specialist. Optimize the provided SMS to reduce spam score while preserving effectiveness and legality.
+
+COMPANY: ${companyName || "(unspecified)"}
+CATEGORY: ${messageCategory || "(unspecified)"}
 TARGET SPAM SCORE: ${targetSpamScore}/10 or lower
-PRESERVE INTENT: ${preserveIntent ? 'Yes' : 'No'}
-INCLUDE UNSUBSCRIBE: ${includeUnsubscribe ? 'Yes' : 'No'}
+PRESERVE INTENT: ${preserveIntent ? "Yes" : "No"}
+INCLUDE UNSUBSCRIBE: ${includeUnsubscribe ? "Yes" : "No"}
+
+OBJECTIVE:
+- Minimize carrier spam risk (Rogers, Bell, Telus) and ensure CASL compliance.
+- Preserve original intent and value proposition (if PRESERVE INTENT is Yes).
+- Maintain clarity, credibility, and user trust.
+
+CASL & POLICY CONSTRAINTS (STRICT):
+1) Unsubscribe: Include "Reply STOP to unsubscribe." in every marketing message. ${bilingualNote}
+2) Identification: Clearly indicate company/sender name (do NOT fabricate missing info).
+3) Consent: Assume list is consented; do not ask for consent in-message.
+4) Links: ${linkPolicy}
+5) Formatting: Avoid ALL CAPS, multiple exclamation points, repeated emojis, and spammy typography.
+6) Language & tone: Value-forward, plain, and honest. No scare tactics, false guarantees, or overhype.
+7) Character budget: Keep under ${characterLimit} chars total. ${
+    singleSegmentTarget
+      ? "Prefer single segment where possible: GSM-7 ≤160 chars, UCS-2 ≤70 chars."
+      : "Multiple segments allowed if necessary, but be concise."
+  }
 
 OPTIMIZATION STRATEGIES:
-1. Replace spam-trigger words with professional alternatives
-2. Remove excessive capitalization and exclamation marks
-3. Reduce emoji usage to 1-2 relevant emojis maximum
-4. Ensure clear value proposition without hype
-5. Use natural, conversational language
-6. Add proper context and legitimacy indicators
-7. Include "Reply STOP to unsubscribe" if missing
-8. Maintain character limit under 160 for single segment
-- Keep the message concise, natural, and value-forward (no hype).
-- Minimize spam triggers.
-- Ensure CASL compliance for SMS in Canada using short-form identification + link.
+- Replace risky words with safe alternatives (see SAFE SUBSTITUTIONS).
+- Reduce punctuation/emojis (≤2 emojis if any). ${
+    includeEmojis ? "Emojis allowed sparingly." : "Avoid emojis; prefer GSM-7."
+  }
+- Keep 1–2 concise sentences; make the value obvious without hype.
+- Prefer branded links; remove tracking params that look suspicious.
+- If INCLUDE UNSUBSCRIBE is Yes and it's missing, add the STOP line (and ARRET where applicable).
 
-COMMON SPAM TRIGGERS TO ELIMINATE:
-- FREE, WIN, PRIZE, CASH, GUARANTEED
-- URGENT, ACT NOW, LIMITED TIME, DON'T MISS OUT
-- Multiple exclamation points (!!!) 
-- ALL CAPS phrases
-- Too many emojis (more than 2)
-- Suspicious or shortened URLs
-- Misleading claims
+CANADIAN CARRIER SPAM TRIGGERS TO ELIMINATE:
+- ${forbiddenBanks.join(", ")}
+- ALL CAPS words, !!!, excessive emojis, more than ${maxLinksPerMessage} link(s), URL shorteners.
 
-OUTPUT FORMAT: Return ONLY a JSON object with this structure:
+SAFE SUBSTITUTIONS GUIDE:
+${safeWordPairs.map(([bad, good]) => `- "${bad}" → "${good}"`).join("\n")}
+
+ENCODING & SEGMENTS (FOR YOUR CALC FIELDS):
+- Encoding: GSM-7 unless any emoji or non-GSM char → UCS-2.
+- Segments:
+  * GSM-7: 160 chars = 1 segment; concatenated segments: 153 chars.
+  * UCS-2: 70 chars = 1 segment; concatenated segments: 67 chars.
+
+WHAT TO RETURN (STRICT JSON ONLY):
 {
   "optimizedMessage": "The improved SMS message text",
   "originalSpamScore": number (estimated),
@@ -173,8 +254,16 @@ OUTPUT FORMAT: Return ONLY a JSON object with this structure:
   }
 }
 
+GUIDELINES FOR OPTIMIZATION:
+- Keep edits minimal; prioritize safe-word swaps and formatting fixes.
+- Ensure STOP (and ARRET if French/bilingual).
+- Respect ${languages.join(", ")} language context.
+- Penalize spammy constructs: hype, urgency, windfalls, prizes, phishing cues, shorteners, unbranded links.
+- Prefer transparent, benefit-led phrasing with a clear next step ("Learn more", "Get started", "Contact us for details").
+
 Return ONLY the JSON object, no other text.`;
-  };
+};
+
 
   // Parse AI response for optimization
   parseOptimizationResponse = (aiResponse, originalMessage) => {

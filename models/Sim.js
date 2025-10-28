@@ -102,13 +102,13 @@ const simSchema = new mongoose.Schema({
 });
 
 // Compound index for unique device + port combination
-simSchema.index({ device: 1, port: 1 }, { unique: true });
+//simSchema.index({ device: 1, port: 1 }, { unique: true });
 
 // Index for efficient querying
-simSchema.index({ status: 1 });
-simSchema.index({ inserted: 1 });
+//simSchema.index({ status: 1 });
+//simSchema.index({ inserted: 1 });
 simSchema.index({ device: 1 });
-simSchema.index({ operator: 1 });
+//simSchema.index({ operator: 1 });
 
 // Virtual for usage percentage
 simSchema.virtual('usagePercentage').get(function() {

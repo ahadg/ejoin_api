@@ -21,6 +21,7 @@
     "jsonwebtoken": "^9.0.2",
     "mailersend": "^2.6.0",
     "mongoose": "^8.18.2",
+    "node-cron": "^4.2.1",
     "socket.io": "^4.8.1"
   },
   "devDependencies": {

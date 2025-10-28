@@ -5,6 +5,7 @@ const { syncDeviceSms, findOrCreateContact } = require("../utils/helpers");
 const Contact = require("../models/Contact");
 const ContactList = require("../models/ContactList");
 const { createAndEmitNotification } = require("./notificationController");
+const DeviceClient = require("../services/deviceClient");
 
 
 
@@ -549,7 +550,7 @@ async function updateContactListCounts(contactListId) {
 }
 
 
-// Main webhook handler - FIXED VERSION
+// Main webhook handler - COMPLETE VERSION with auto responses
 exports.webhookSMS = async (req, res) => {
   try {
     const { type, mac, smses } = req.body;
@@ -740,13 +741,14 @@ exports.webhookSMS = async (req, res) => {
       }
 
       // ==========================================================
-      // 🔸 Handle Regular or STOP Messages
+      // 🔸 Handle Regular, STOP, or START Messages
       // ==========================================================
 
       const lowerMsg = (decodedSMS || '').trim().toLowerCase();
-      const isStopMessage = ['stop', 'unsubscribe', 'cancel', 'quit', 'end', 'unsub'].includes(lowerMsg);
+      const isStopMessage = ['stop',"STOP", 'unsubscribe', 'cancel', 'quit', 'end', 'unsub'].includes(lowerMsg);
+      const isStartMessage = ['start', 'subscribe', 'yes', 'unstop', 'resubscribe'].includes(lowerMsg);
 
-      console.log(`📨 Processing ${isStopMessage ? 'STOP' : 'regular'} message from ${from}`);
+      console.log(`📨 Processing ${isStopMessage ? 'STOP' : isStartMessage ? 'START' : 'regular'} message from ${from}`);
 
       // 🔹 Save the message
       const savedMessage = await SimMessages.create({
@@ -761,7 +763,7 @@ exports.webhookSMS = async (req, res) => {
         sms: decodedSMS,
         rawSms: sms || null,
         direction: 'inbound',
-        status: isStopMessage ? 'unsubscribed' : 'delivered',
+        status: isStopMessage ? 'unsubscribed' : isStartMessage ? 'subscribed' : 'delivered',
         isSpamReport: isStopMessage
       });
       
@@ -769,7 +771,7 @@ exports.webhookSMS = async (req, res) => {
         .populate("sim")
         .populate("contact");
 
-      // 🔹 Handle STOP message
+      // 🔹 Handle STOP message - Unsubscribe contact
       if (isStopMessage && from) {
         const updatedContact = await Contact.findOneAndUpdate(
           { phoneNumber: from },
@@ -778,7 +780,8 @@ exports.webhookSMS = async (req, res) => {
               isReport: true,
               isSpam: true,
               optedIn: false,
-              lastReported: new Date(ts * 1000)
+              lastReported: new Date(ts * 1000),
+              unsubscribedAt: new Date(ts * 1000)
             }
           },
           { new: true }
@@ -789,7 +792,36 @@ exports.webhookSMS = async (req, res) => {
         if (updatedContact?.contactList) {
           await updateContactListCounts(updatedContact.contactList);
         }
+
+        // 🔹 Send automatic unsubscribe confirmation
+        await sendUnsubscribeConfirmation(device, port, from, decodedSMS);
       }      
+
+      // 🔹 Handle START message - Resubscribe contact
+      if (isStartMessage && from) {
+        const updatedContact = await Contact.findOneAndUpdate(
+          { phoneNumber: from },
+          {
+            $set: {
+              isReport: false,
+              isSpam: false,
+              optedIn: true,
+              lastSubscribed: new Date(ts * 1000),
+              unsubscribedAt: null
+            }
+          },
+          { new: true }
+        );
+      
+        console.log(`✅ START message processed from ${from}`);
+      
+        if (updatedContact?.contactList) {
+          await updateContactListCounts(updatedContact.contactList);
+        }
+
+        // 🔹 Send automatic resubscribe confirmation
+        await sendResubscribeConfirmation(device, port, from, decodedSMS);
+      }
 
       // 🔹 Emit real-time message if user is online
       if (isUserOnline) {
@@ -801,7 +833,8 @@ exports.webhookSMS = async (req, res) => {
         console.log(`📤 Real-time SMS sent to user:${device.user._id}`, {
           from: from,
           message: decodedSMS ? decodedSMS.substring(0, 30) + '...' : 'No content',
-          isStopMessage
+          isStopMessage,
+          isStartMessage
         });
       }
 
@@ -813,16 +846,27 @@ exports.webhookSMS = async (req, res) => {
       const shouldCreateNotification = !isUserOnline || !isUserOnInbox || !isViewingThisConversation;
 
       if (shouldCreateNotification) {
-        const notificationTitle = isStopMessage ? 'Unsubscribe Message Received' : 'New SMS Received';
-        const notificationMessage = isStopMessage
-          ? `From: ${from} - Sent "STOP" to unsubscribe`
-          : `From: ${from} - ${decodedSMS ? decodedSMS.substring(0, 50) + (decodedSMS.length > 50 ? '...' : '') : 'No content'}`;
+        let notificationTitle, notificationMessage, notificationType;
+        
+        if (isStopMessage) {
+          notificationTitle = 'Unsubscribe Message Received';
+          notificationMessage = `From: ${from} - Sent "STOP" to unsubscribe`;
+          notificationType = 'warning';
+        } else if (isStartMessage) {
+          notificationTitle = 'Resubscribe Message Received';
+          notificationMessage = `From: ${from} - Sent "START" to resubscribe`;
+          notificationType = 'success';
+        } else {
+          notificationTitle = 'New SMS Received';
+          notificationMessage = `From: ${from} - ${decodedSMS ? decodedSMS.substring(0, 50) + (decodedSMS.length > 50 ? '...' : '') : 'No content'}`;
+          notificationType = 'info';
+        }
 
         const notificationData = {
           user: device.user._id,
           title: notificationTitle,
           message: notificationMessage,
-          type: isStopMessage ? 'warning' : 'info',
+          type: notificationType,
           data: {
             messageId: savedMessage._id.toString(),
             phoneNumber: from,
@@ -831,6 +875,7 @@ exports.webhookSMS = async (req, res) => {
             timestamp: new Date(ts * 1000),
             preview: decodedSMS ? decodedSMS.substring(0, 100) : '',
             isStopMessage,
+            isStartMessage,
             direction: 'inbound'
           }
         };
@@ -841,7 +886,7 @@ exports.webhookSMS = async (req, res) => {
           userOnline: isUserOnline,
           userOnInbox: isUserOnInbox,
           viewingConversation: isViewingThisConversation,
-          type: isStopMessage ? 'STOP' : 'regular'
+          type: isStopMessage ? 'STOP' : isStartMessage ? 'START' : 'regular'
         });
       } else {
         console.log(`🔇 Notification skipped for user:${device.user._id}`, {
@@ -861,6 +906,112 @@ exports.webhookSMS = async (req, res) => {
     res.status(500).json({ code: 500, reason: "Failed to save SMS", error: err.message });
   }
 };
+
+// Helper function to send unsubscribe confirmation
+async function sendUnsubscribeConfirmation(device, port, toPhoneNumber, originalMessage) {
+  try {
+    const client = new DeviceClient(device);
+    console.log("sendUnsubscribeConfirmation",)
+    const unsubscribeMessage = "You have successfully been unsubscribed. You will not receive any more messages from this number. Reply START to resubscribe.";
+    
+    const smsTask = {
+      id: Number(`${Date.now()}${Math.floor(Math.random() * 1000)}`),
+      from: port.toString(), // Use the same port that received the message
+      sms: unsubscribeMessage,
+      interval_min: 0,
+      interval_max: 1000,
+      timeout: 30,
+      charset: 'utf8',
+      coding: 0,
+      sdr: true,
+      fdr: true,
+      dr: true,
+      to_all: true,
+      recipients: [toPhoneNumber],
+    };
+
+    console.log(`📤 Sending unsubscribe confirmation to ${toPhoneNumber} on port ${port}`);
+    
+    const result = await client.sendSms([smsTask]);
+    console.log(`✅ Unsubscribe confirmation sent:`, result);
+
+    // Save the sent message to database
+    const sim = await Sim.findOne({ device: device._id, port });
+    if (sim) {
+      await SimMessages.create({
+        sim: sim._id,
+        clientNumber: toPhoneNumber,
+        timestamp: new Date(),
+        from: port.toString(),
+        to: toPhoneNumber,
+        read: false,
+        sms: unsubscribeMessage,
+        direction: 'outbound',
+        status: 'sent',
+        isAutoResponse: true,
+        autoResponseType: 'unsubscribe_confirmation'
+      });
+    }
+
+    return result;
+  } catch (error) {
+    console.error(`❌ Failed to send unsubscribe confirmation to ${toPhoneNumber}:`, error);
+    throw error;
+  }
+}
+
+// Helper function to send resubscribe confirmation
+async function sendResubscribeConfirmation(device, port, toPhoneNumber, originalMessage) {
+  try {
+    const client = new DeviceClient(device);
+    
+    const resubscribeMessage = "You have successfully resubscribed. You will now receive messages from this number. Reply STOP to unsubscribe at any time.";
+    
+    const smsTask = {
+      id: Number(`${Date.now()}${Math.floor(Math.random() * 1000)}`),
+      from: port.toString(), // Use the same port that received the message
+      sms: resubscribeMessage,
+      interval_min: 0,
+      interval_max: 1000,
+      timeout: 30,
+      charset: 'utf8',
+      coding: 0,
+      sdr: true,
+      fdr: true,
+      dr: true,
+      to_all: true,
+      recipients: [toPhoneNumber],
+    };
+
+    console.log(`📤 Sending resubscribe confirmation to ${toPhoneNumber} on port ${port}`);
+    
+    const result = await client.sendSms([smsTask]);
+    console.log(`✅ Resubscribe confirmation sent:`, result);
+
+    // Save the sent message to database
+    const sim = await Sim.findOne({ device: device._id, port });
+    if (sim) {
+      await SimMessages.create({
+        sim: sim._id,
+        clientNumber: toPhoneNumber,
+        timestamp: new Date(),
+        from: port.toString(),
+        to: toPhoneNumber,
+        read: false,
+        sms: resubscribeMessage,
+        direction: 'outbound',
+        status: 'sent',
+        isAutoResponse: true,
+        autoResponseType: 'resubscribe_confirmation'
+      });
+    }
+
+    return result;
+  } catch (error) {
+    console.error(`❌ Failed to send resubscribe confirmation to ${toPhoneNumber}:`, error);
+    throw error;
+  }
+}
 
 // Health check endpoint for webhook
 exports.webhookHealth = async (req, res) => {

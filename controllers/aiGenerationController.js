@@ -202,123 +202,213 @@ class AIGenerationController {
   };
 
   // Build comprehensive system prompt for Grok (updated with category guidance)
-  buildSystemPrompt = (params) => {
-    const {
-      prompt = "",
-      variantCount,
-      characterLimit,
-      tones,
-      languages,
-      creativityLevel,
-      includeEmojis,
-      companyName,
-      companyAddress,
-      companyEmail,
-      companyPhone,
-      companyWebsite,
-      unsubscribeText,
-      customInstructions,
-      category = 'General',
-      previousMessages = []
-    } = params;
-  
-    const categoryGuidance = this.getCategoryGuidance(category);
-  
-    // 🧠 Smart: Tell the AI to also infer company info from user prompt if missing
-    let systemPrompt = `You are an expert SMS copywriter creating ${variantCount} CASL-compliant SMS variants for Canadian recipients.
-  
-  MESSAGE CATEGORY: ${category}
-  ${categoryGuidance}
-  
-  REQUIREMENTS:
-  - Max ${characterLimit} characters per message
-  - Include legal sender name: "${companyName || 'Use the company name mentioned in the user prompt if available'}"
-  - Include unsubscribe text: "${unsubscribeText}"
-  - Tones: ${tones.join(', ')}
-  - Languages: ${languages.join(', ')}
-  - Creativity level: ${creativityLevel}
-  - Emojis: ${includeEmojis ? 'Allowed' : 'Not allowed'}
-  ${customInstructions ? `- Custom instructions: ${customInstructions}` : ''}
-  
-  CANADA’S ANTI-SPAM LEGISLATION (CASL) REQUIREMENTS:
-  1. Only message recipients with **valid consent** (express or implied). Never invent or imply consent.
-  2. **Sender identification**:
-     - Must clearly identify the sender. ${
-       companyName
-         ? `Use "${companyName}".`
-         : `If no company name provided in parameters, infer it from the user's prompt if it’s mentioned.`
-     }
-     - ${
-       companyAddress
-         ? `Include mailing address: "${companyAddress}".`
-         : `If no mailing address parameter provided, check if the prompt includes one.`
-     }
-     - ${
-       companyEmail || companyPhone || companyWebsite
-         ? `Contact method(s): ${[
-             companyEmail && `Email: ${companyEmail}`,
-             companyPhone && `Phone: ${companyPhone}`,
-             companyWebsite && `Website: ${companyWebsite}`,
-           ]
-             .filter(Boolean)
-             .join(', ')}.`
-         : `If no contact info parameters provided, use any contact info found in the prompt.`
-     }
-  3. **Unsubscribe mechanism**:
-     - Include a simple opt-out (e.g., "Reply STOP").
-  4. **Transparency**: No false or misleading claims.
-  5. **Transactional messages**: Must still identify sender and include unsubscribe text.
-  6. If bilingual context, may include French equivalent for STOP ("ARRET").
+ // Build a comprehensive, CASL-safe system prompt for Grok (or any LLM)
+// Drop-in compatible with your current function signature.
+// New optional params: allowedLinkDomain, maxLinksPerMessage (default 1), strictBilingualStop (default true)
 
-  COMMON SPAM TRIGGERS:
-    - Excessive use of capital letters
-    - Too many emojis or special characters
-    - Urgency language (ACT NOW!, LIMITED TIME!)
-    - Financial incentives (FREE, WIN, PRIZE, CASH)
-    - Suspicious links or URL shorteners
-    - Missing unsubscribe mechanism
-    - Misleading or deceptive content
-    - Overly promotional language without value
-  
-  OUTPUT FORMAT:
-  Return ONLY JSON array of variants:
-  [
-    {
-      "content": "...",
-      "tone": "...",
-      "language": "...",
-      "characterCount": ...,
-      "spamScore": ...,
-      "encoding": "...",
-      "cost": ...
-    }
-  ]
-  
-  RULES:
-  1. Must include unsubscribe text in every variant.
-  2. Never exceed ${characterLimit} characters.
-  3. Calculate character count accurately.
-  4. Apply correct encoding (UCS-2 for emojis, else GSM-7).
-  5. Assign realistic spam scores (0–5).
-  6. Respect CASL legal rules described above.
-  7. Be compelling, clear, and compliant.
-  
-  USER PROMPT CONTEXT:
-  "${prompt}"
-  
-  If any company details (name, address, contact info) are missing from parameters,
-  you may safely use or reference those that appear naturally in the user's prompt text.`;
-  
-    if (previousMessages?.length) {
-      systemPrompt += `
-  PREVIOUS MESSAGES CONTEXT:
-  ${previousMessages.map((msg, i) => `${i + 1}. "${msg}"`).join('\n')}
-  Use them as inspiration to maintain campaign consistency.`;
-    }
-  
-    return systemPrompt;
-  };
-  
+buildSystemPrompt = (params) => {
+  const {
+    prompt = "",
+    variantCount,
+    characterLimit,
+    tones = [],
+    languages = ["English"],
+    creativityLevel = "medium",
+    includeEmojis = false,
+    companyName,
+    companyAddress,
+    companyEmail,
+    companyPhone,
+    companyWebsite,
+    unsubscribeText = 'Reply STOP to unsubscribe.',
+    customInstructions,
+    category = "General",
+    previousMessages = [],
+    // NEW optional constraints:
+    allowedLinkDomain,            // e.g., "example.com" (forces branded links only)
+    maxLinksPerMessage = 1,       // default: 1 link max
+    strictBilingualStop = true    // adds French ARRET when French is detected/requested
+  } = params;
+
+  // Helper: safe-word substitutions to avoid spam triggers (Canadian carrier patterns)
+  const safeWordPairs = [
+    ["Free", "Complimentary"],
+    ["FREE", "Complimentary"],
+    ["Buy now", "Shop today"],
+    ["Limited time offer", "Special offer"],
+    ["Click here", "Learn more"],
+    ["Act now", "Join today"],
+    ["Earn money fast", "Grow your income"],
+    ["Get paid today", "Payment available"],
+    ["100% guaranteed", "Proven results"],
+    ["Risk-free", "No obligation"],
+    ["Best price", "Great value"],
+    ["Winner", "You qualify"],
+    ["You’ve won", "You’re selected"],
+    ["Claim your prize", "Redeem your reward"],
+    ["Verify your account", "Confirm your details securely"],
+    ["Update your information", "Manage your profile"],
+    ["Urgent", "Quick response appreciated"],
+    ["Password", "Access"],
+    ["Login now", "Sign in securely"],
+    ["Cash", "Credit"],
+    ["Instant", "Begin now"],
+    ["Cheap", "Affordable"],
+    ["Discount code", "Promo code"],
+    ["Refund", "Request assistance"],
+    ["Investment opportunity", "Partnership"],
+    ["Trial", "Demo"],
+  ];
+
+  const forbiddenBanks = [
+    // Financial / money-hype
+    "Free money","Earn cash fast","Make money now","Instant profit","Get paid today",
+    "Double your income","Risk-free investment","100% guaranteed","Increase sales instantly","Financial freedom",
+    // Aggressive promo/hype
+    "Free!!!","Act now!","Limited time offer","Click here","Buy now","Order today","Don’t miss out",
+    "Call now","Exclusive deal","Best price","Lowest rate","Offer expires soon","Save big",
+    // Prizes/rewards
+    "Congratulations","You’ve won","Claim your prize","Get your gift card","Reward points","Winner",
+    "Instant reward","Special bonus",
+    // Tech/phishing
+    "Verify your account","Update your information","Confirm your password","Login now",
+    "Security alert","Suspicious activity","Urgent: account suspended",
+    // Health/adult
+    "Lose weight fast","Viagra","Cialis","ED","Detox","miracle cure","Enhance performance","Adult content","18+",
+    // Link + formatting signals
+    "bit.ly","tinyurl","goo.gl" // shortened URLs to avoid
+  ];
+
+  // Category guidance (assume you have this.getCategoryGuidance)
+  const categoryGuidance = this.getCategoryGuidance
+    ? this.getCategoryGuidance(category)
+    : "(No category guidance provided)";
+
+  // Build a human-readable substitution table for the prompt
+  const substitutionTable = safeWordPairs
+    .map(([bad, good]) => `- "${bad}" → "${good}"`)
+    .join("\n");
+
+  // Compose sender identification lines
+  const senderIdGuidance = `
+- Legal sender name: "${companyName || 'Use the company name mentioned in the user prompt if available'}"
+- Mailing address: ${
+    companyAddress
+      ? `"${companyAddress}"`
+      : "Use address from the prompt if provided; otherwise omit (do NOT invent)."
+  }
+- Contact method(s): ${
+    [companyEmail && `Email: ${companyEmail}`, companyPhone && `Phone: ${companyPhone}`, companyWebsite && `Website: ${companyWebsite}`]
+      .filter(Boolean)
+      .join(", ") || "Use only if present in the prompt; otherwise omit (do NOT invent)."
+  }`.trim();
+
+  // Link policy line
+  const linkPolicy = allowedLinkDomain
+    ? `- Max ${maxLinksPerMessage} link per message, use ONLY branded domain: ${allowedLinkDomain} (no URL shorteners).`
+    : `- Max ${maxLinksPerMessage} link per message, avoid URL shorteners and suspicious redirects.`
+
+  // Languages & bilingual STOP/ARRET
+  const langLine = languages.join(", ");
+  const stopLine = strictBilingualStop
+    ? `Include unsubscribe in the message language. If French is used or requested, add "Répondez ARRET pour vous désabonner" (alongside STOP if bilingual).`
+    : `Include unsubscribe in the message language; add French ARRET only when French is used.`
+
+  // Emojis/encoding guardrails
+  const emojiPolicy = includeEmojis
+    ? `Emojis allowed sparingly (≤2 per message). If ANY emoji is present, encoding is UCS-2; otherwise GSM-7.`
+    : `No emojis. Use GSM-7 encoding.`
+
+  // Build the final system prompt
+  let systemPrompt = `You are an expert SMS copywriter creating ${variantCount} CASL-compliant SMS variants for Canadian recipients.
+
+GOALS:
+- Produce compelling, clear, and compliant SMS that pass Canadian carrier spam filters (Rogers, Bell, Telus).
+- Respect user consent, sender identification, and opt-out rules at all times.
+
+MESSAGE CATEGORY: ${category}
+${categoryGuidance}
+
+REQUIREMENTS:
+- Max ${characterLimit} characters per message (hard cap).
+- Tones: ${tones.join(", ") || "neutral, friendly"}.
+- Languages: ${langLine}.
+- Creativity level: ${creativityLevel}.
+- Emojis: ${includeEmojis ? "Allowed (light use)" : "Not allowed"}.
+${customInstructions ? `- Custom instructions: ${customInstructions}` : ""}
+
+SENDER IDENTIFICATION (CASL):
+${senderIdGuidance}
+
+CASL COMPLIANCE RULES:
+1) Consent: Write messages ONLY for recipients with valid consent (express or implied). Do NOT imply or invent consent.
+2) Identification: Clearly identify the sender using the legal name and available contact info (no fabrications).
+3) Unsubscribe: Include a simple opt-out in EVERY message (e.g., "Reply STOP to unsubscribe"). ${stopLine}
+4) Transparency: No false, misleading, or deceptive claims. No unrealistic guarantees or scare tactics.
+5) Transactional: Still include sender identification and unsubscribe.
+6) Record-keeping: Messages must stand alone as compliant without external references.
+
+LINK POLICY & FORMATTING:
+${linkPolicy}
+- Avoid ALL CAPS, excessive punctuation, repeated emojis, and spammy typography.
+- Keep messages concise (≤${characterLimit} chars), 1–2 short sentences maximum.
+
+ANTI-SPAM GUARDRAILS:
+A) Do NOT use blacklisted phrases/constructs commonly flagged by Canadian carriers:
+${forbiddenBanks.map(w => `- ${w}`).join("\n")}
+B) Use safe alternatives (auto-substitute if needed):
+${substitutionTable}
+
+STYLE GUARDRAILS:
+- Personalize lightly when possible (e.g., "Hi {{first_name}}") if such placeholder is present in USER PROMPT; otherwise, keep generic.
+- Value-forward phrasing; avoid pushy urgency and superlatives.
+- Prefer verbs like "Learn more", "Explore", "Get started", "Contact us for details".
+- If pricing is mentioned in USER PROMPT, present plainly without superlatives or hype.
+- ${emojiPolicy}
+
+ENCODING, SEGMENTS & COST (for your own calculation fields):
+- Encoding: GSM-7 unless any emoji or non-GSM characters are present → then UCS-2.
+- Segment rules (typical industry reference):
+  * GSM-7: up to 160 chars = 1 segment; concatenated segments: 153 chars each.
+  * UCS-2: up to 70 chars = 1 segment; concatenated segments: 67 chars each.
+- Cost: Estimate based on segments (you may return a per-variant rough estimate as "cost" using segment count; do NOT guess carrier prices).
+
+OUTPUT FORMAT (STRICT):
+Return ONLY a JSON array with exactly ${variantCount} items. Each item object MUST have:
+{
+  "content": "string",
+  "tone": "one-of-requested-tones",
+  "language": "one-of-requested-languages",
+  "characterCount": number,
+  "spamScore": number,        // 0 (safest) to 5 (riskier). Most should be 0–2 if compliant.
+  "encoding": "GSM-7|UCS-2",
+  "cost": number              // segments as integer (1, 2, 3, ...). If unknown, estimate by rules above.
+}
+
+VALIDATION RULES:
+1) Include unsubscribe text in EVERY variant (English STOP; add French ARRET if French is used or bilingual context requested).
+2) NEVER exceed ${characterLimit} characters.
+3) Calculate characterCount precisely (count actual characters in "content").
+4) Determine encoding correctly; if ANY emoji or non-GSM char → UCS-2.
+5) Assign realistic spamScore (consider risky words, urgency, hype, links).
+6) Do NOT use URL shorteners or unbranded links${allowedLinkDomain ? `; only ${allowedLinkDomain}` : ""}.
+7) Max ${maxLinksPerMessage} link per message.
+8) Respect CASL rules and anti-spam guardrails above.
+9) If the USER PROMPT includes sender info (name/address/contact), you may use it. Do NOT fabricate missing details.
+
+USER PROMPT CONTEXT:
+"${prompt}"
+
+CONSENT & DATA HANDLING:
+- Assume the list is consented. Do NOT mention consent in the message body. Do NOT ask for personal data.
+
+PREVIOUS MESSAGES CONTEXT (use only for stylistic consistency, not as claims):
+${previousMessages.length ? previousMessages.map((m,i)=>`${i+1}. "${m}"`).join("\n") : "(none)"} 
+`;
+
+  return systemPrompt;
+};
+
   
   
 

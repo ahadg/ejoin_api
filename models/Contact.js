@@ -65,11 +65,13 @@ const contactSchema = new mongoose.Schema({
 });
 
 // Compound index for unique phone number per contact list
-contactSchema.index({ contactList: 1, phoneNumber: 1 }, { unique: true });
+contactSchema.index({ contactList: 1, phoneNumber: 1 }, 
+//  { unique: true }
+);
 
 // Index for SIM affinity queries
 contactSchema.index({ 'assignedSim.simId': 1 });
-contactSchema.index({ 'assignedSim.deviceId': 1 });
+//contactSchema.index({ 'assignedSim.deviceId': 1 });
 
 // Update contact list counts when contacts change
 contactSchema.post('save', async function() {
