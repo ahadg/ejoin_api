@@ -2,15 +2,28 @@ const ContactList = require('../models/ContactList');
 const Contact = require('../models/Contact');
 
 // Get contacts in a list
+// In your contacts controller, ensure search works with pagination
 exports.getContacts = async (req, res) => {
   try {
-    const { page = 1, limit = 50, status } = req.query;
+    const { page = 1, limit = 50, status, optedIn, search } = req.query;
 
     const contactList = await ContactList.findOne({ _id: req.params.listId, user: req.user._id });
     if (!contactList) return res.status(404).json({ code: 404, reason: 'Contact list not found' });
 
     const query = { contactList: contactList._id };
+    
+    // Add search functionality
+    if (search) {
+      query.$or = [
+        { phoneNumber: { $regex: search, $options: 'i' } },
+        { firstName: { $regex: search, $options: 'i' } },
+        { lastName: { $regex: search, $options: 'i' } },
+        { email: { $regex: search, $options: 'i' } }
+      ];
+    }
+    
     if (status) query.status = status;
+    if (optedIn !== undefined) query.optedIn = optedIn === 'true';
 
     const contacts = await Contact.find(query)
       .sort({ createdAt: -1 })
@@ -21,7 +34,13 @@ exports.getContacts = async (req, res) => {
 
     res.json({
       code: 200,
-      data: { contacts, totalPages: Math.ceil(total / limit), currentPage: parseInt(page), total }
+      data: { 
+        contacts, 
+        totalPages: Math.ceil(total / limit), 
+        currentPage: parseInt(page), 
+        total,
+        limit: parseInt(limit)
+      }
     });
   } catch (error) {
     console.error('Get contacts error:', error);
@@ -57,10 +76,10 @@ exports.updateContact = async (req, res) => {
         sanitizedBody[key] = sanitizedBody[key].trim().replace(/^"+|"+$/g, ''); // remove extra quotes
       }
     }
-
+    console.log("req.params.id",req.params.id,)
     // 🔹 Update contact for current user
     const contact = await Contact.findOneAndUpdate(
-      { _id: req.params.id, user: req.user._id },
+      { _id: req.params.id },
       { ...sanitizedBody, updatedAt: new Date() },
       { new: true, runValidators: true }
     );
