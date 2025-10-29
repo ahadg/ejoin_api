@@ -66,7 +66,7 @@ const contactSchema = new mongoose.Schema({
 
 // Compound index for unique phone number per contact list
 contactSchema.index({ contactList: 1, phoneNumber: 1 }, 
-//  { unique: true }
+  { unique: true }
 );
 
 // Index for SIM affinity queries

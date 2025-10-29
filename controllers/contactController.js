@@ -182,6 +182,8 @@ exports.importContacts = async (req, res) => {
     const importedContacts = [];
     const errors = [];
 
+    console.log("contacts",contacts.length)
+
     for (const [index, contactData] of contacts.entries()) {
       try {
         const contact = new Contact({
@@ -194,6 +196,7 @@ exports.importContacts = async (req, res) => {
         await contact.save();
         importedContacts.push(contact);
       } catch (error) {
+        console.log("error",error)
         errors.push({ index, error: error.message, data: contactData });
       }
     }

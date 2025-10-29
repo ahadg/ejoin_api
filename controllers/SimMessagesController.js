@@ -577,6 +577,15 @@ exports.webhookSMS = async (req, res) => {
         status
       } = msg;
 
+      // Skip if no sender
+      if (!from) continue;
+
+      // ✅ Normalize phone number
+      const original = from.replace(/\D/g, ""); // keep only digits
+      const noCountryCode = original.startsWith("1") ? original.slice(1) : original;
+      const withCountryCode = original.startsWith("1") ? original : `1${original}`;
+      const phoneMatches = [original, noCountryCode, withCountryCode];
+
       // 🔹 Identify Device by MAC
       let device = await Device.findOne({ macAddress: mac }).populate('user');
       if (!device) {
@@ -606,8 +615,8 @@ exports.webhookSMS = async (req, res) => {
       }
 
       // 🔹 Find or create contact for sender
-      let contact = null;
-      if (from) {
+      let contact = await Contact.findOne({ phoneNumber: { $in: phoneMatches } });
+      if (!contact) {
         contact = await findOrCreateContact(from, device.user._id.toString());
       }
 
@@ -622,7 +631,7 @@ exports.webhookSMS = async (req, res) => {
         }
       }
 
-      // 🔹 Check user online status and viewing state - FIXED CALL
+      // 🔹 Check user online status and viewing state
       const userStatus = getUserOnlineStatus(io, device.user._id.toString(), {
         from,
         to,
@@ -631,20 +640,18 @@ exports.webhookSMS = async (req, res) => {
       });
       const { isUserOnline, isUserOnInbox, isViewingThisConversation } = userStatus;
 
-      console.log(`👤 User ${device.user._id} status:`, {
-        online: isUserOnline,
-        onInbox: isUserOnInbox,
-        viewingConversation: isViewingThisConversation
-      });
+      console.log(`👤 User ${device.user._id} status:`, userStatus);
 
+      // ==========================================================
+      // 🔸 Handle SPAM REPORT Message
+      // ==========================================================
       if (is_report) {
         console.log(`🚨 Processing spam report from ${from}`);
 
-        // Update original message status
         await SimMessages.findOneAndUpdate(
           { 
-            to: from, // In reports, 'from' is the original recipient
-            from: to, // In reports, 'to' is the original sender
+            to: from,
+            from: to,
             port,
             slot,
             direction: 'outbound'
@@ -658,10 +665,10 @@ exports.webhookSMS = async (req, res) => {
           }
         );
 
-        const contactList = await ContactList.findOne({ _id: contact.contactList});
-        updateContactListCounts(contactList._id)
+        if (contact?.contactList) {
+          await updateContactListCounts(contact.contactList);
+        }
       
-        // Create spam report message
         const reportMessage = await SimMessages.create({
           sim: sim._id,
           contact: contact ? contact._id : undefined,
@@ -672,7 +679,6 @@ exports.webhookSMS = async (req, res) => {
           read: false,
           isReport: true,
           sms: 'User reported this number as spam',
-          rawSms: null,
           direction: 'inbound',
           status: 'delivered',
           isSpamReport: true
@@ -682,21 +688,18 @@ exports.webhookSMS = async (req, res) => {
           .populate("sim")
           .populate("contact");
 
-        // Emit real-time message if user is online
         if (isUserOnline) {
           io.to(`user:${device.user._id}`).emit("sms-received", {
             ...populatedReport.toObject(),
             id: populatedReport._id.toString()
           });
-          
           console.log(`📤 Real-time spam report sent to user:${device.user._id}`);
         }
 
-        // Only create notification if user is offline OR not viewing this conversation
         const shouldCreateNotification = !isUserOnline || !isUserOnInbox || !isViewingThisConversation;
 
         if (shouldCreateNotification) {
-          const notificationData = {
+          await createAndEmitNotification(io, {
             user: device.user._id,
             title: 'Spam Report Received',
             message: `Your number was reported as spam by ${from}`,
@@ -709,34 +712,23 @@ exports.webhookSMS = async (req, res) => {
               timestamp: new Date(ts * 1000),
               isSpamReport: true
             }
-          };
-        
-          await createAndEmitNotification(io, notificationData);
-          console.log(`📢 Spam report notification created for user:${device.user._id}`, {
-            userOnline: isUserOnline,
-            userOnInbox: isUserOnInbox,
-            viewingConversation: isViewingThisConversation
           });
-        } else {
-          console.log(`🔇 Spam report notification skipped - user is viewing conversation`);
         }
 
-        // Update contact as spam
-        if (from) {
-          await Contact.findOneAndUpdate(
-            { phoneNumber: from },
-            { 
-              $set: { 
-                isReport: true, 
-                optedIn: false,
-                isSpam: true,
-                lastReported: new Date(ts * 1000)
-              } 
-            }
-          );
-          console.log(`📝 Marked contact ${from} as spam`);
-        }
-      
+        // ✅ Mark all matching contacts as spam
+        await Contact.updateMany(
+          { phoneNumber: { $in: phoneMatches } },
+          { 
+            $set: { 
+              isReport: true, 
+              optedIn: false,
+              isSpam: true,
+              lastReported: new Date(ts * 1000)
+            } 
+          }
+        );
+
+        console.log(`📝 Marked contact(s) ${phoneMatches.join(", ")} as spam`);
         continue;
       }
 
@@ -745,7 +737,7 @@ exports.webhookSMS = async (req, res) => {
       // ==========================================================
 
       const lowerMsg = (decodedSMS || '').trim().toLowerCase();
-      const isStopMessage = ['stop',"STOP", 'unsubscribe', 'cancel', 'quit', 'end', 'unsub'].includes(lowerMsg);
+      const isStopMessage = ['stop', 'unsubscribe', 'cancel', 'quit', 'end', 'unsub'].includes(lowerMsg);
       const isStartMessage = ['start', 'subscribe', 'yes', 'unstop', 'resubscribe'].includes(lowerMsg);
 
       console.log(`📨 Processing ${isStopMessage ? 'STOP' : isStartMessage ? 'START' : 'regular'} message from ${from}`);
@@ -771,36 +763,37 @@ exports.webhookSMS = async (req, res) => {
         .populate("sim")
         .populate("contact");
 
-      // 🔹 Handle STOP message - Unsubscribe contact
-      if (isStopMessage && from) {
-        const updatedContact = await Contact.findOneAndUpdate(
-          { phoneNumber: from },
+      // 🔹 STOP (unsubscribe)
+      if (isStopMessage) {
+        const updateResult = await Contact.updateMany(
+          { phoneNumber: { $in: phoneMatches } },
           {
             $set: {
               isReport: true,
               isSpam: true,
               optedIn: false,
               lastReported: new Date(ts * 1000),
-              unsubscribedAt: new Date(ts * 1000)
-            }
-          },
-          { new: true }
+              unsubscribedAt: new Date(ts * 1000),
+            },
+          }
         );
-      
-        console.log(`🛑 STOP message processed from ${from}`);
-      
-        if (updatedContact?.contactList) {
-          await updateContactListCounts(updatedContact.contactList);
+
+        console.log(`🛑 STOP message processed from ${from} (${updateResult.modifiedCount} contacts)`);
+
+        const contacts = await Contact.find({ phoneNumber: { $in: phoneMatches } });
+        const contactListIds = [...new Set(contacts.map(c => c.contactList).filter(Boolean))];
+
+        for (const listId of contactListIds) {
+          await updateContactListCounts(listId);
         }
 
-        // 🔹 Send automatic unsubscribe confirmation
         await sendUnsubscribeConfirmation(device, port, from, decodedSMS);
-      }      
+      }
 
-      // 🔹 Handle START message - Resubscribe contact
-      if (isStartMessage && from) {
-        const updatedContact = await Contact.findOneAndUpdate(
-          { phoneNumber: from },
+      // 🔹 START (resubscribe)
+      if (isStartMessage) {
+        const updateResult = await Contact.updateMany(
+          { phoneNumber: { $in: phoneMatches } },
           {
             $set: {
               isReport: false,
@@ -809,71 +802,53 @@ exports.webhookSMS = async (req, res) => {
               lastSubscribed: new Date(ts * 1000),
               unsubscribedAt: null
             }
-          },
-          { new: true }
+          }
         );
-      
-        console.log(`✅ START message processed from ${from}`);
-      
-        if (updatedContact?.contactList) {
-          await updateContactListCounts(updatedContact.contactList);
+
+        console.log(`✅ START message processed from ${from} (${updateResult.modifiedCount} contacts)`);
+
+        const contacts = await Contact.find({ phoneNumber: { $in: phoneMatches } });
+        const contactListIds = [...new Set(contacts.map(c => c.contactList).filter(Boolean))];
+
+        for (const listId of contactListIds) {
+          await updateContactListCounts(listId);
         }
 
-        // 🔹 Send automatic resubscribe confirmation
         await sendResubscribeConfirmation(device, port, from, decodedSMS);
       }
 
-      // 🔹 Emit real-time message if user is online
+      // 🔹 Real-time emit + notification handling remain unchanged
       if (isUserOnline) {
         io.to(`user:${device.user._id}`).emit("sms-received", {
           ...populatedMessage.toObject(),
           id: populatedMessage._id.toString()
         });
-
-        console.log(`📤 Real-time SMS sent to user:${device.user._id}`, {
-          from: from,
-          message: decodedSMS ? decodedSMS.substring(0, 30) + '...' : 'No content',
-          isStopMessage,
-          isStartMessage
-        });
       }
 
-      // 🔹 Determine if notification should be created
-      // Only create notification if:
-      // 1. User is offline, OR
-      // 2. User is online but NOT on inbox, OR  
-      // 3. User is on inbox but NOT viewing this specific conversation
-      const shouldCreateNotification = !isUserOnline || !isUserOnInbox || !isViewingThisConversation;
+      const shouldCreateNotification =
+        !isUserOnline || !isUserOnInbox || !isViewingThisConversation;
 
       if (shouldCreateNotification) {
-        let notificationTitle, notificationMessage, notificationType;
-        
-        if (isStopMessage) {
-          notificationTitle = 'Unsubscribe Message Received';
-          notificationMessage = `From: ${from} - Sent "STOP" to unsubscribe`;
-          notificationType = 'warning';
-        } else if (isStartMessage) {
-          notificationTitle = 'Resubscribe Message Received';
-          notificationMessage = `From: ${from} - Sent "START" to resubscribe`;
-          notificationType = 'success';
-        } else {
-          notificationTitle = 'New SMS Received';
-          notificationMessage = `From: ${from} - ${decodedSMS ? decodedSMS.substring(0, 50) + (decodedSMS.length > 50 ? '...' : '') : 'No content'}`;
-          notificationType = 'info';
-        }
-
         const notificationData = {
           user: device.user._id,
-          title: notificationTitle,
-          message: notificationMessage,
-          type: notificationType,
+          title: isStopMessage
+            ? 'Unsubscribe Message Received'
+            : isStartMessage
+            ? 'Resubscribe Message Received'
+            : 'New SMS Received',
+          message: isStopMessage
+            ? `From: ${from} - Sent "STOP" to unsubscribe`
+            : isStartMessage
+            ? `From: ${from} - Sent "START" to resubscribe`
+            : `From: ${from} - ${decodedSMS?.substring(0, 50) || ''}`,
+          type: isStopMessage ? 'warning' : isStartMessage ? 'success' : 'info',
           data: {
             messageId: savedMessage._id.toString(),
             phoneNumber: from,
             port,
             slot,
             timestamp: new Date(ts * 1000),
-            preview: decodedSMS ? decodedSMS.substring(0, 100) : '',
+            preview: decodedSMS?.substring(0, 100) || '',
             isStopMessage,
             isStartMessage,
             direction: 'inbound'
@@ -881,20 +856,6 @@ exports.webhookSMS = async (req, res) => {
         };
 
         await createAndEmitNotification(io, notificationData);
-        
-        console.log(`📢 Notification created for user:${device.user._id}`, {
-          userOnline: isUserOnline,
-          userOnInbox: isUserOnInbox,
-          viewingConversation: isViewingThisConversation,
-          type: isStopMessage ? 'STOP' : isStartMessage ? 'START' : 'regular'
-        });
-      } else {
-        console.log(`🔇 Notification skipped for user:${device.user._id}`, {
-          userOnline: isUserOnline,
-          userOnInbox: isUserOnInbox,
-          viewingConversation: isViewingThisConversation,
-          reason: 'User is online and viewing this conversation in inbox'
-        });
       }
     }
 
@@ -906,6 +867,7 @@ exports.webhookSMS = async (req, res) => {
     res.status(500).json({ code: 500, reason: "Failed to save SMS", error: err.message });
   }
 };
+
 
 // Helper function to send unsubscribe confirmation
 async function sendUnsubscribeConfirmation(device, port, toPhoneNumber, originalMessage) {

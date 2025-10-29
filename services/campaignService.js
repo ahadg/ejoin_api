@@ -990,24 +990,24 @@ class CampaignService {
     });
 
     // Resume paused campaigns that hit daily limits by re-queuing them
-    const pausedCampaigns = await Campaign.find({
-      status: 'paused',
-      $or: [
-        { pauseReason: 'daily_limit_reached' },
-        { pauseReason: 'no_available_sims' }
-      ]
-    });
+    // const pausedCampaigns = await Campaign.find({
+    //   status: 'paused',
+    //   $or: [
+    //     { pauseReason: 'daily_limit_reached' },
+    //     { pauseReason: 'no_available_sims' }
+    //   ]
+    // });
 
-    for (const campaign of pausedCampaigns) {
-      try {
-        console.log(`Resuming paused campaign ${campaign._id} after daily reset`);
-        await this.resumeCampaign(campaign._id);
-      } catch (err) {
-        console.error(`Failed to resume campaign ${campaign._id}:`, err);
-      }
-    }
+    // for (const campaign of pausedCampaigns) {
+    //   try {
+    //     console.log(`Resuming paused campaign ${campaign._id} after daily reset`);
+    //     await this.resumeCampaign(campaign._id);
+    //   } catch (err) {
+    //     console.error(`Failed to resume campaign ${campaign._id}:`, err);
+    //   }
+    // }
 
-    console.log('Daily counts reset for campaigns, SIMs, and devices');
+    // console.log('Daily counts reset for campaigns, SIMs, and devices');
   }
 
   // Cleanup stuck jobs
