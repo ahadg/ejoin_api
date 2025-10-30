@@ -135,7 +135,8 @@ exports.updateCampaign = async (req, res) => {
         totalContacts : contactListData?.optedInCount,
         name, contactList, device, status, taskId,
         messageContent, scheduledDate, priority, taskSettings,
-        updatedAt: new Date()
+        updatedAt: new Date(),
+        ...req.body
       },
       { new: true, runValidators: true }
     ).populate('contactList').populate('device');
