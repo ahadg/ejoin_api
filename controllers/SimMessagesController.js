@@ -630,7 +630,7 @@ exports.webhookSMS = async (req, res) => {
           console.warn('Could not decode SMS as base64, using raw value');
         }
       }
-
+      console.log("decodedSMS",decodedSMS)
       // 🔹 Check user online status and viewing state
       const userStatus = getUserOnlineStatus(io, device.user._id.toString(), {
         from,
@@ -640,7 +640,7 @@ exports.webhookSMS = async (req, res) => {
       });
       const { isUserOnline, isUserOnInbox, isViewingThisConversation } = userStatus;
 
-      console.log(`👤 User ${device.user._id} status:`, userStatus);
+      //console.log(`👤 User ${device.user._id} status:`, userStatus);
 
       // ==========================================================
       // 🔸 Handle SPAM REPORT Message
@@ -721,7 +721,7 @@ exports.webhookSMS = async (req, res) => {
           { 
             $set: { 
               isReport: true, 
-              optedIn: false,
+              //optedIn: false,
               isSpam: true,
               lastReported: new Date(ts * 1000)
             } 
@@ -737,9 +737,17 @@ exports.webhookSMS = async (req, res) => {
       // ==========================================================
 
       const lowerMsg = (decodedSMS || '').trim().toLowerCase();
-      const isStopMessage = ['stop', 'unsubscribe', 'cancel', 'quit', 'end', 'unsub'].includes(lowerMsg);
-      const isStartMessage = ['start', 'subscribe', 'yes', 'unstop', 'resubscribe'].includes(lowerMsg);
 
+      const stopKeywords = ['stop', 'unsubscribe', 'cancel',
+         //'quit', 'end', 
+         'unsub'];
+      const startKeywords = ['start', 'subscribe', 
+        //'yes', 'unstop', 
+        'resubscribe'];
+      
+      const isStopMessage = stopKeywords.some(word => lowerMsg.includes(word));
+      const isStartMessage = startKeywords.some(word => lowerMsg.includes(word));
+      
       console.log(`📨 Processing ${isStopMessage ? 'STOP' : isStartMessage ? 'START' : 'regular'} message from ${from}`);
 
       // 🔹 Save the message
