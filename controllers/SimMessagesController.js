@@ -351,6 +351,45 @@ exports.markAsRead = async (req, res) => {
   }
 };
 
+// Add this to your SimMessagesController
+exports.markConversationAsRead = async (req, res) => {
+  try {
+    const { deviceId, phoneNumber, port, slot } = req.body;
+
+    // Update all unread messages in this conversation
+    const result = await SimMessages.updateMany(
+      {
+        deviceId,
+        $or: [
+          { from: phoneNumber, direction: 'inbound' },
+          { to: phoneNumber, direction: 'outbound' }
+        ],
+        port,
+        slot,
+        read: false
+      },
+      { 
+        $set: { 
+          read: true,
+          readAt: new Date()
+        } 
+      }
+    );
+
+    res.json({ 
+      code: 200, 
+      success: true, 
+      data: { 
+        modifiedCount: result.modifiedCount,
+        message: `Marked ${result.modifiedCount} messages as read` 
+      } 
+    });
+  } catch (err) {
+    console.error("MarkConversationAsRead Error:", err);
+    res.status(500).json({ code: 500, reason: "Failed to mark conversation as read" });
+  }
+};
+
 // ================== Sync SMS ==================
 exports.syncSms = async (req, res) => {
   try {
@@ -883,7 +922,14 @@ async function sendUnsubscribeConfirmation(device, port, toPhoneNumber, original
     const client = new DeviceClient(device);
     console.log("sendUnsubscribeConfirmation",)
     const unsubscribeMessage = "You have successfully been unsubscribed. You will not receive any more messages from this number. Reply START to resubscribe.";
+    // ✅ Normalize phone number
+    const original = toPhoneNumber.replace(/\D/g, ""); // keep only digits
+    const noCountryCode = original.startsWith("1") ? original.slice(1) : original;
+    const withCountryCode = original.startsWith("1") ? original : `1${original}`;
+    const phoneMatches = [original, noCountryCode, withCountryCode];
     
+
+    let contact = await Contact.findOne({ phoneNumber: { $in: phoneMatches } });
     const smsTask = {
       id: Number(`${Date.now()}${Math.floor(Math.random() * 1000)}`),
       from: port.toString(), // Use the same port that received the message
@@ -911,6 +957,7 @@ async function sendUnsubscribeConfirmation(device, port, toPhoneNumber, original
       await SimMessages.create({
         sim: sim._id,
         clientNumber: toPhoneNumber,
+        contact : contact?._id,
         timestamp: new Date(),
         from: port.toString(),
         to: toPhoneNumber,
@@ -933,10 +980,17 @@ async function sendUnsubscribeConfirmation(device, port, toPhoneNumber, original
 // Helper function to send resubscribe confirmation
 async function sendResubscribeConfirmation(device, port, toPhoneNumber, originalMessage) {
   try {
+    console.log({})
     const client = new DeviceClient(device);
     
     const resubscribeMessage = "You have successfully resubscribed. You will now receive messages from this number. Reply STOP to unsubscribe at any time.";
+    const original = toPhoneNumber.replace(/\D/g, ""); // keep only digits
+    const noCountryCode = original.startsWith("1") ? original.slice(1) : original;
+    const withCountryCode = original.startsWith("1") ? original : `1${original}`;
+    const phoneMatches = [original, noCountryCode, withCountryCode];
     
+
+    let contact = await Contact.findOne({ phoneNumber: { $in: phoneMatches } });
     const smsTask = {
       id: Number(`${Date.now()}${Math.floor(Math.random() * 1000)}`),
       from: port.toString(), // Use the same port that received the message
@@ -964,6 +1018,7 @@ async function sendResubscribeConfirmation(device, port, toPhoneNumber, original
       await SimMessages.create({
         sim: sim._id,
         clientNumber: toPhoneNumber,
+        contact : contact?._id,
         timestamp: new Date(),
         from: port.toString(),
         to: toPhoneNumber,

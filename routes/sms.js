@@ -13,6 +13,8 @@ router.post("/send", SimMessagesController.sendSMS);
 // POST /api/sms/markAsRead
 router.post("/markAsRead/:messageId", auth, SimMessagesController.markAsRead);
 
+router.post("/conversations/mark-as-read", auth, SimMessagesController.markConversationAsRead);
+
 // POST /api/sms/webhook
 router.post("/webhook", SimMessagesController.webhookSMS);
 
