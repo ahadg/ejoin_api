@@ -85,11 +85,12 @@ exports.getMessageById = async (req, res) => {
 
 exports.updateMessage = async (req, res) => {
   try {
-    const { name, category, baseMessage, settings } = req.body;
+    const { name, category, baseMessage, originalPrompt, settings, variants } = req.body;
 
+    // Step 1: Update the main message
     const message = await Message.findOneAndUpdate(
       { _id: req.params.id, user: req.user._id },
-      { name, category, baseMessage, settings, updatedAt: new Date() },
+      { name, category, originalPrompt, baseMessage, settings, updatedAt: new Date() },
       { new: true, runValidators: true }
     );
 
@@ -97,16 +98,32 @@ exports.updateMessage = async (req, res) => {
       return res.status(404).json({ code: 404, reason: 'Message not found' });
     }
 
+    // Step 2: If variants provided, replace them
+    if (variants && Array.isArray(variants)) {
+      // Delete existing variants
+      await MessageVariant.deleteMany({ message: message._id });
+
+      // Insert new variants
+      if (variants.length > 0) {
+        const variantsToInsert = variants.map(v => ({
+          ...v,
+          message: message._id,
+        }));
+        await MessageVariant.insertMany(variantsToInsert);
+      }
+    }
+
     res.json({
       code: 200,
       message: 'Message updated successfully',
-      data: { message }
+      data: { message },
     });
   } catch (error) {
     console.error('Update message error:', error);
     res.status(500).json({ code: 500, reason: 'Error updating message' });
   }
 };
+
 
 exports.deleteMessage = async (req, res) => {
   try {
