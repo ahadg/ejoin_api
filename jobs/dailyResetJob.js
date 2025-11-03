@@ -4,7 +4,8 @@ const CampaignService = require('../services/campaignService');
 const Campaign = require('../models/Campaign');
 
 // At minute 0 of every hour
-cron.schedule('0 * * * *', async () => {
+cron.schedule('0 * * * *', 
+  async () => {
   console.log('🕐 Checking time restrictions for active campaigns...');
   
   try {
@@ -27,6 +28,23 @@ cron.schedule('0 * * * *', async () => {
     console.error('Error in time restriction monitor:', error);
   }
 });
+
+// Run every day at midnight Toronto (Eastern) time
+cron.schedule(
+  '0 0 * * *',
+  async () => {
+    console.log('Running daily reset job (Canada time)...');
+    try {
+      await CampaignService.resetDailyCounts();
+      console.log('Daily reset completed successfully');
+    } catch (error) {
+      console.error('Daily reset job failed:', error);
+    }
+  },
+  {
+    timezone: 'America/Toronto', // Canadian Eastern Time
+  }
+);
 
 console.log('🕐 Time restriction monitor initialized');
 
