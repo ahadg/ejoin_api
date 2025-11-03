@@ -232,6 +232,80 @@ class CampaignService {
     }
   }
 
+  // Check if current time is within allowed hours
+isWithinAllowedHours(timeRestrictions) {
+  if (!timeRestrictions?.enabled) {
+    return true; // No restrictions enabled
+  }
+
+  const now = new Date();
+  const timezone = timeRestrictions.timezone || 'America/Toronto';
+  
+  // Convert to target timezone
+  const options = { 
+    timeZone: timezone, 
+    hour: '2-digit', 
+    hour12: false 
+  };
+  const currentHour = parseInt(now.toLocaleString('en-US', options));
+  
+  const startHour = timeRestrictions.startHour || 9;
+  const endHour = timeRestrictions.endHour || 17;
+  
+  // Handle overnight ranges (e.g., 22-6)
+  if (startHour <= endHour) {
+    // Normal daytime range (e.g., 9 AM - 5 PM)
+    return currentHour >= startHour && currentHour < endHour;
+  } else {
+    // Overnight range (e.g., 10 PM - 6 AM)
+    return currentHour >= startHour || currentHour < endHour;
+  }
+}
+
+// Check and auto-pause/resume campaigns based on time restrictions
+async checkTimeRestrictions(campaignId) {
+  try {
+    const campaign = await Campaign.findById(campaignId);
+    if (!campaign || !campaign.taskSettings?.timeRestrictions?.enabled) {
+      return;
+    }
+
+    const timeRestrictions = campaign.taskSettings.timeRestrictions;
+    const isWithinHours = this.isWithinAllowedHours(timeRestrictions);
+    
+    if (campaign.status === 'active' && !isWithinHours) {
+      // Auto-pause campaign outside allowed hours
+      console.log(`Auto-pausing campaign ${campaignId} - outside allowed hours`);
+      await this.pauseCampaign(campaignId, 'outside_allowed_hours');
+      
+      // Emit notification
+      await this.emitCampaignStatusChange(
+        campaignId, 
+        'active', 
+        'paused', 
+        `Auto-paused: Outside allowed hours (${timeRestrictions.startHour}:00-${timeRestrictions.endHour}:00 ${timeRestrictions.timezone})`
+      );
+    } else if (campaign.status === 'paused' && 
+               campaign.pauseReason === 'outside_allowed_hours' && 
+               isWithinHours) {
+      // Auto-resume campaign when back within allowed hours
+      console.log(`Auto-resuming campaign ${campaignId} - within allowed hours`);
+      await this.resumeCampaign(campaignId);
+      
+      // Emit notification
+      await this.emitCampaignStatusChange(
+        campaignId, 
+        'paused', 
+        'active', 
+        `Auto-resumed: Within allowed hours (${timeRestrictions.startHour}:00-${timeRestrictions.endHour}:00 ${timeRestrictions.timezone})`
+      );
+    }
+  } catch (error) {
+    console.error(`Error checking time restrictions for campaign ${campaignId}:`, error);
+  }
+}
+
+
   // Emit campaign progress via socket.io
   async emitCampaignProgress(campaignId) {
     try {
@@ -366,6 +440,15 @@ class CampaignService {
       return;
     }
 
+    if (campaign?.taskSettings?.timeRestrictions?.enabled) {
+      const isWithinHours = this.isWithinAllowedHours(campaign.taskSettings.timeRestrictions);
+      if (!isWithinHours) {
+        console.log(`Campaign ${campaignId} is outside allowed hours, pausing`);
+        await this.pauseCampaign(campaignId, 'outside_allowed_hours');
+        return;
+      }
+    }
+
     // Get available SIMs for the device (just for validation)
     let availableSims;
     try {
@@ -434,6 +517,15 @@ class CampaignService {
         console.log(`Campaign ${campaignId} marked completed. Exiting worker.`);
         await this.emitCampaignProgress(campaignId);
         return;
+      }
+
+      if (campaign.taskSettings?.timeRestrictions?.enabled) {
+        const isWithinHours = this.isWithinAllowedHours(campaign.taskSettings.timeRestrictions);
+        if (!isWithinHours) {
+          console.log(`Campaign ${campaignId} reached end of allowed hours, pausing`);
+          await this.pauseCampaign(campaignId, 'outside_allowed_hours');
+          return;
+        }
       }
 
       // Get SIM for contact 

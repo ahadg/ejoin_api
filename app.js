@@ -274,6 +274,7 @@ const gracefulShutdown = async () => {
 };
 
 require('./jobs/dailyResetJob');
+require('./utils/cleanupJob');
 //require('./utils/updateOpteInScript');
 
 // Handle shutdown signals

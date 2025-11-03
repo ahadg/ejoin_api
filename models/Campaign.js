@@ -57,7 +57,13 @@ const campaignSchema = new mongoose.Schema({
     messageVariationType: { type: String, enum: ['single_variant','multiple_variants', 'ai_random'], default: 'single_variant' },
     useAiGeneration: { type: Boolean, default: false },
     aiPrompt: { type: String, default: '' },
-    companyName: { type: String, default: '' }
+    companyName: { type: String, default: '' },
+    timeRestrictions: {
+      enabled: { type: Boolean, default: false },
+      startHour: { type: Number, min: 0, max: 23, default: 9 }, // 9 AM
+      endHour: { type: Number, min: 0, max: 23, default: 17 },  // 5 PM
+      timezone: { type: String, default: 'America/Toronto' }
+    }
   },
   // Statistics
   totalContacts: { type: Number, default: 0 },

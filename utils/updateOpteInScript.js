@@ -39,56 +39,50 @@ async function updateContactListCounts(contactListId) {
     await mongoose.connect(process.env.MONGODB_URI);
     console.log("✅ Connected to MongoDB");
 
-    const stopKeywords = ["stop", "unsubscribe", "cancel", "quit", "end", "unsub"];
+    const stopKeywords = ["stop", "unsubscribe", "cancel", "unsub"];
     const stopMessages = await SimMessages.find({
       sms: { $regex: stopKeywords.join("|"), $options: "i" },
       direction: "inbound",
     });
 
-    console.log(`Found ${stopMessages.length} messages with STOP keywords`);
+    console.log(`📩 Found ${stopMessages.length} messages containing STOP keywords`);
 
     for (const msg of stopMessages) {
       if (!msg.from) continue;
 
-      // Normalize phone number variations
-      const original = msg.from.replace(/\D/g, ""); // only digits
+      // Normalize phone numbers
+      const original = msg.from.replace(/\D/g, "");
       const noCountryCode = original.startsWith("1") ? original.slice(1) : original;
       const withCountryCode = original.startsWith("1") ? original : `1${original}`;
-
-      // Match both patterns
       const phoneMatches = [original, noCountryCode, withCountryCode];
 
+      // Only update optedIn status — don't mark spam/report
       const updatedContacts = await Contact.updateMany(
         { phoneNumber: { $in: phoneMatches } },
         {
           $set: {
             optedIn: false,
-            isSpam: true,
-            isReport: true,
             unsubscribedAt: msg.timestamp || new Date(),
             lastReported: msg.timestamp || new Date(),
           },
         }
       );
 
-      console.log(`Updated ${updatedContacts.modifiedCount} contacts for ${msg.from}`);
+      console.log(`🛑 Unsubscribed ${updatedContacts.modifiedCount} contact(s) for ${msg.from}`);
 
-      // Find ALL contacts matching either version
+      // Update their contact list counts
       const contacts = await Contact.find({ phoneNumber: { $in: phoneMatches } });
-
-      const contactListIds = [
-        ...new Set(contacts.map((c) => c.contactList).filter(Boolean)),
-      ];
+      const contactListIds = [...new Set(contacts.map(c => c.contactList).filter(Boolean))];
 
       for (const listId of contactListIds) {
         await updateContactListCounts(listId);
       }
     }
 
-    console.log("✅ All STOP messages processed.");
+    console.log("✅ STOP message processing completed.");
     process.exit(0);
   } catch (err) {
-    console.error("Error:", err);
+    console.error("❌ Error:", err);
     process.exit(1);
   }
 })();
