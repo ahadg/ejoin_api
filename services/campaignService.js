@@ -133,9 +133,6 @@ class CampaignService {
             assignedSim.slotActive && 
             assignedSim.status === 'active') {
           
-          // Reset daily count if needed
-          //await this.resetSimDailyCountIfNeeded(assignedSim);
-          
           // Check if SIM is within daily limits
           if (assignedSim.dailySent < assignedSim.dailyLimit) {
             console.log(`Using assigned SIM ${assignedSim._id} for contact ${contact.phoneNumber}`);
@@ -232,79 +229,134 @@ class CampaignService {
     }
   }
 
-  // Check if current time is within allowed hours
-isWithinAllowedHours(timeRestrictions) {
-  if (!timeRestrictions?.enabled) {
-    return true; // No restrictions enabled
+  // FIXED: Proper timezone conversion
+  isWithinAllowedHours(timeRestrictions) {
+    if (!timeRestrictions?.enabled) {
+      return true; // No restrictions enabled
+    }
+
+    try {
+      const now = new Date();
+      const timezone = timeRestrictions.timezone || 'America/Toronto';
+      
+      // Convert current time to target timezone using proper method
+      const formatter = new Intl.DateTimeFormat('en-US', {
+        timeZone: timezone,
+        hour: '2-digit',
+        hour12: false,
+        minute: '2-digit'
+      });
+      
+      const parts = formatter.formatToParts(now);
+      const hour = parseInt(parts.find(part => part.type === 'hour').value);
+      const minute = parseInt(parts.find(part => part.type === 'minute').value);
+      const currentTimeInMinutes = hour * 60 + minute;
+      
+      const startHour = timeRestrictions.startHour || 9;
+      const endHour = timeRestrictions.endHour || 17;
+      const startTimeInMinutes = startHour * 60;
+      const endTimeInMinutes = endHour * 60;
+      
+      console.log(`Time check - Current: ${hour}:${minute} (${currentTimeInMinutes}min), Allowed: ${startHour}:00-${endHour}:00 (${startTimeInMinutes}-${endTimeInMinutes}min), Timezone: ${timezone}`);
+      
+      // Handle normal time ranges
+      if (startTimeInMinutes <= endTimeInMinutes) {
+        return currentTimeInMinutes >= startTimeInMinutes && currentTimeInMinutes < endTimeInMinutes;
+      } else {
+        // Overnight range (e.g., 22:00 - 6:00)
+        return currentTimeInMinutes >= startTimeInMinutes || currentTimeInMinutes < endTimeInMinutes;
+      }
+    } catch (error) {
+      console.error('Error checking time restrictions:', error);
+      return true; // Default to allowing if there's an error
+    }
   }
 
-  const now = new Date();
-  const timezone = timeRestrictions.timezone || 'America/Toronto';
-  
-  // Convert to target timezone
-  const options = { 
-    timeZone: timezone, 
-    hour: '2-digit', 
-    hour12: false 
-  };
-  const currentHour = parseInt(now.toLocaleString('en-US', options));
-  
-  const startHour = timeRestrictions.startHour || 9;
-  const endHour = timeRestrictions.endHour || 17;
-  
-  // Handle overnight ranges (e.g., 22-6)
-  if (startHour <= endHour) {
-    // Normal daytime range (e.g., 9 AM - 5 PM)
-    return currentHour >= startHour && currentHour < endHour;
-  } else {
-    // Overnight range (e.g., 10 PM - 6 AM)
-    return currentHour >= startHour || currentHour < endHour;
-  }
-}
-
-// Check and auto-pause/resume campaigns based on time restrictions
-async checkTimeRestrictions(campaignId) {
+ // FIXED: Enhanced time restriction check with better state management
+async checkAndHandleTimeRestrictions(campaignId) {
   try {
     const campaign = await Campaign.findById(campaignId);
     if (!campaign || !campaign.taskSettings?.timeRestrictions?.enabled) {
-      return;
+      return { shouldProcess: true, reason: 'no_restrictions' };
     }
 
     const timeRestrictions = campaign.taskSettings.timeRestrictions;
     const isWithinHours = this.isWithinAllowedHours(timeRestrictions);
     
+    console.log(`Time restriction check for campaign ${campaignId}:`, {
+      enabled: timeRestrictions.enabled,
+      timezone: timeRestrictions.timezone,
+      startHour: timeRestrictions.startHour,
+      endHour: timeRestrictions.endHour,
+      isWithinHours,
+      currentStatus: campaign.status,
+      pauseReason: campaign.pauseReason
+    });
+
+    // Handle auto-pause when outside hours
     if (campaign.status === 'active' && !isWithinHours) {
-      // Auto-pause campaign outside allowed hours
       console.log(`Auto-pausing campaign ${campaignId} - outside allowed hours`);
-      await this.pauseCampaign(campaignId, 'outside_allowed_hours');
+      await Campaign.findByIdAndUpdate(campaignId, {
+        status: 'paused',
+        pauseReason: 'outside_allowed_hours',
+        pausedAt: new Date(),
+        updatedAt: new Date()
+      });
       
-      // Emit notification
-      await this.emitCampaignStatusChange(
-        campaignId, 
-        'active', 
-        'paused', 
-        `Auto-paused: Outside allowed hours (${timeRestrictions.startHour}:00-${timeRestrictions.endHour}:00 ${timeRestrictions.timezone})`
-      );
-    } else if (campaign.status === 'paused' && 
-               campaign.pauseReason === 'outside_allowed_hours' && 
-               isWithinHours) {
-      // Auto-resume campaign when back within allowed hours
-      console.log(`Auto-resuming campaign ${campaignId} - within allowed hours`);
-      await this.resumeCampaign(campaignId);
+      // Pause the queue to stop processing
+      const queueName = `campaign-${campaignId}`;
+      const queue = this.queues.get(queueName);
+      if (queue) {
+        try {
+          await queue.pause();
+        } catch (err) {
+          console.error(`Error pausing queue ${queueName}:`, err);
+        }
+      }
       
-      // Emit notification
-      await this.emitCampaignStatusChange(
-        campaignId, 
-        'paused', 
-        'active', 
-        `Auto-resumed: Within allowed hours (${timeRestrictions.startHour}:00-${timeRestrictions.endHour}:00 ${timeRestrictions.timezone})`
-      );
+      await this.emitCampaignStatusChange(campaignId, 'active', 'paused', 'outside_allowed_hours');
+      return { shouldProcess: false, reason: 'outside_hours_paused' };
     }
+    
+    // Handle auto-resume when back within hours
+    if (campaign.status === 'paused' && 
+        campaign.pauseReason === 'outside_allowed_hours' && 
+        isWithinHours) {
+      console.log(`Auto-resuming campaign ${campaignId} - within allowed hours`);
+      
+      // Resume the queue
+      const queueName = `campaign-${campaignId}`;
+      const queue = this.queues.get(queueName);
+      if (queue) {
+        try {
+          await queue.resume();
+        } catch (err) {
+          console.error(`Error resuming queue ${queueName}:`, err);
+        }
+      }
+      
+      await Campaign.findByIdAndUpdate(campaignId, {
+        status: 'active',
+        pauseReason: null,
+        resumedAt: new Date(),
+        updatedAt: new Date()
+      });
+      
+      await this.emitCampaignStatusChange(campaignId, 'paused', 'active', 'within_hours_auto_resume');
+      return { shouldProcess: true, reason: 'within_hours_resumed' };
+    }
+
+    // If campaign is paused for time restrictions and still outside hours, don't process
+    if (campaign.status === 'paused' && campaign.pauseReason === 'outside_allowed_hours' && !isWithinHours) {
+      return { shouldProcess: false, reason: 'still_outside_hours' };
+    }
+
+    return { shouldProcess: isWithinHours, reason: isWithinHours ? 'within_hours' : 'outside_hours' };
   } catch (error) {
     console.error(`Error checking time restrictions for campaign ${campaignId}:`, error);
+    return { shouldProcess: true, reason: 'error_default_allow' };
   }
 }
-
 
   // Emit campaign progress via socket.io
   async emitCampaignProgress(campaignId) {
@@ -372,7 +424,8 @@ async checkTimeRestrictions(campaignId) {
       };
 
       io.to(`user:${campaign.user._id}`).emit("campaign-status-change", statusData);
-      console.log(`Campaign status change emitted: ${campaignId} - ${oldStatus} → ${newStatus}`);
+      console.log(`usCampaign status change emitted: ${campaignId} - ${oldStatus} → ${newStatus}`);
+      console.log(`user:${campaign.user._id}`);
     } catch (error) {
       console.error(`Error emitting campaign status change for ${campaignId}:`, error);
     }
@@ -422,6 +475,13 @@ async checkTimeRestrictions(campaignId) {
     const { campaignId } = job.data;
     console.log(`Worker processing campaign ${campaignId}`);
 
+    // FIXED: Check time restrictions BEFORE loading campaign data
+    const timeCheck = await this.checkAndHandleTimeRestrictions(campaignId);
+    if (!timeCheck.shouldProcess) {
+      console.log(`Campaign ${campaignId} cannot process: ${timeCheck.reason}`);
+      return;
+    }
+
     // Load campaign with relations
     const campaign = await Campaign.findById(campaignId)
       .populate('contactList')
@@ -440,13 +500,11 @@ async checkTimeRestrictions(campaignId) {
       return;
     }
 
-    if (campaign?.taskSettings?.timeRestrictions?.enabled) {
-      const isWithinHours = this.isWithinAllowedHours(campaign.taskSettings.timeRestrictions);
-      if (!isWithinHours) {
-        console.log(`Campaign ${campaignId} is outside allowed hours, pausing`);
-        await this.pauseCampaign(campaignId, 'outside_allowed_hours');
-        return;
-      }
+    // FIXED: Double-check time restrictions after loading campaign
+    const finalTimeCheck = await this.checkAndHandleTimeRestrictions(campaignId);
+    if (!finalTimeCheck.shouldProcess) {
+      console.log(`Campaign ${campaignId} stopped processing due to time restrictions: ${finalTimeCheck.reason}`);
+      return;
     }
 
     // Get available SIMs for the device (just for validation)
@@ -501,6 +559,13 @@ async checkTimeRestrictions(campaignId) {
       const contact = contacts[i];
       const processingStartTime = Date.now();
 
+      // FIXED: Check time restrictions before each message
+      const perMessageTimeCheck = await this.checkAndHandleTimeRestrictions(campaignId);
+      if (!perMessageTimeCheck.shouldProcess) {
+        console.log(`Stopping campaign ${campaignId} at contact ${i} due to time restrictions`);
+        return;
+      }
+
       // Re-check campaign status (in case paused/stopped externally)
       const currentCampaign = await Campaign.findById(campaignId);
       if (!currentCampaign) {
@@ -519,15 +584,6 @@ async checkTimeRestrictions(campaignId) {
         return;
       }
 
-      if (campaign.taskSettings?.timeRestrictions?.enabled) {
-        const isWithinHours = this.isWithinAllowedHours(campaign.taskSettings.timeRestrictions);
-        if (!isWithinHours) {
-          console.log(`Campaign ${campaignId} reached end of allowed hours, pausing`);
-          await this.pauseCampaign(campaignId, 'outside_allowed_hours');
-          return;
-        }
-      }
-
       // Get SIM for contact 
       let sim;
       try {
@@ -538,13 +594,6 @@ async checkTimeRestrictions(campaignId) {
         return;
       }
       console.log("SIM selected sim.port",sim.port.toString())
-      // Check campaign daily limit
-      // const campaignDailySent = await this.getTodaySentCount(campaignId);
-      // if (campaign.taskSettings?.dailyMessageLimit && campaignDailySent >= campaign.taskSettings.dailyMessageLimit) {
-      //   console.log(`Campaign ${campaignId} reached campaign daily limit. Pausing.`);
-      //   await this.pauseCampaign(campaignId, 'daily_limit_reached');
-      //   return;
-      // }
 
       // Generate message variant
       const finalMessage = await this.generateMessageVariant(campaignId, campaign.taskSettings || {}, contact);
@@ -575,7 +624,6 @@ async checkTimeRestrictions(campaignId) {
 
         if (ejoinResponse?.[0]?.reason === "OK") {  
           // Update campaign stats and SIM counters
-          //await this.updateCampaignStats(campaignId, { sentMessages: 1, lastSentAt: new Date() });
           await this.updateSimDailyCount(sim._id);
 
           // Update device last seen
@@ -606,7 +654,6 @@ async checkTimeRestrictions(campaignId) {
         } else {
           // Handle failure response
           console.error(`SMS send responded with error for campaign ${campaignId}`, ejoinResponse);
-          //await this.updateCampaignStats(campaignId, { failedMessages: 1 });
 
           // Track failed message
           await this.trackMessageEvent(
@@ -628,7 +675,6 @@ async checkTimeRestrictions(campaignId) {
       } catch (err) {
         const processingTime = Date.now() - processingStartTime;
         console.error(`Error sending SMS for campaign ${campaignId} to ${contact.phoneNumber}:`, err);
-        //await this.updateCampaignStats(campaignId, { failedMessages: 1 });
 
         // Track errored message
         await this.trackMessageEvent(
@@ -857,7 +903,7 @@ async checkTimeRestrictions(campaignId) {
     return campaign.sentMessagesToday || 0;
   }
 
-  // Start campaign background processing
+  // FIXED: Enhanced start campaign with time restriction validation
   async startCampaignProcessing(campaignId) {
     try {
       const campaign = await Campaign.findById(campaignId)
@@ -868,11 +914,32 @@ async checkTimeRestrictions(campaignId) {
       if (!campaign || !campaign.contactList) {
         throw new Error('Campaign or contact list not found');
       }
-      console.log("campaign_start");
+
+      // FIXED: Enhanced time restriction check before starting
+      if (campaign?.taskSettings?.timeRestrictions?.enabled) {
+        const timeCheck = await this.checkAndHandleTimeRestrictions(campaignId);
+        
+        if (!timeCheck.shouldProcess) {
+          console.log(`Cannot start campaign ${campaignId} - ${timeCheck.reason}`);
+          
+          // Only update if not already in the correct state
+          if (campaign.status !== 'paused' || campaign.pauseReason !== timeCheck.reason) {
+            await Campaign.findByIdAndUpdate(campaignId, {
+              status: 'paused',
+              pauseReason: timeCheck.reason,
+              pausedAt: new Date(),
+              updatedAt: new Date()
+            });
+            
+            await this.emitCampaignStatusChange(campaignId, campaign.status, 'paused', timeCheck.reason);
+          }
+          
+          throw new Error(`Cannot start campaign: ${timeCheck.reason}`);
+        }
+      }
 
       // Create queue + worker for this campaign
       const queue = await this.createCampaignProcessor(campaignId);
-      console.log("campaign_end");
       
       // Add one job that the worker will process
       await queue.add('process-campaign', {
@@ -884,7 +951,9 @@ async checkTimeRestrictions(campaignId) {
       // Update campaign status
       await Campaign.findByIdAndUpdate(campaignId, {
         status: 'active',
-        processingStartedAt: new Date()
+        processingStartedAt: new Date(),
+        pauseReason: null, // Clear any previous pause reason
+        updatedAt: new Date()
       });
 
       // Emit start event via socket
@@ -904,7 +973,7 @@ async checkTimeRestrictions(campaignId) {
     return Math.floor(Math.random() * (max - min + 1)) + min;
   }
 
-  // Pause campaign (pauses queue and sets DB state)
+  // FIXED: Enhanced pause campaign with better state management
   async pauseCampaign(campaignId, reason = 'manual') {
     const queueName = `campaign-${campaignId}`;
     const queue = this.queues.get(queueName);
@@ -921,22 +990,52 @@ async checkTimeRestrictions(campaignId) {
     const currentCampaign = await Campaign.findById(campaignId);
     const oldStatus = currentCampaign?.status || 'active';
 
-    // Update campaign status
-    await Campaign.findByIdAndUpdate(campaignId, {
-      status: 'paused',
-      pauseReason: reason,
-      pausedAt: new Date()
-    });
+    // Only update if not already in the target state
+    if (currentCampaign?.status !== 'paused' || currentCampaign?.pauseReason !== reason) {
+      await Campaign.findByIdAndUpdate(campaignId, {
+        status: 'paused',
+        pauseReason: reason,
+        pausedAt: new Date()
+      });
 
-    // Emit pause events via socket
-    await this.emitCampaignStatusChange(campaignId, oldStatus, 'paused', reason);
-    await this.emitCampaignProgress(campaignId);
+      // Emit pause events via socket
+      await this.emitCampaignStatusChange(campaignId, oldStatus, 'paused', reason);
+      await this.emitCampaignProgress(campaignId);
 
-    console.log(`Campaign ${campaignId} paused: ${reason}`);
+      console.log(`Campaign ${campaignId} paused: ${reason}`);
+    } else {
+      console.log(`Campaign ${campaignId} already paused with reason: ${reason}`);
+    }
   }
 
-  // Resume campaign (re-queue a process-campaign job)
-  async resumeCampaign(campaignId) {
+  // FIXED: Enhanced resume campaign with time restriction check
+  // FIXED: Enhanced resume campaign with better time restriction handling
+async resumeCampaign(campaignId) {
+  try {
+    const campaign = await Campaign.findById(campaignId);
+    if (!campaign) {
+      throw new Error('Campaign not found');
+    }
+
+    // If campaign was paused due to time restrictions, check if we're now within hours
+    if (campaign.pauseReason === 'outside_allowed_hours') {
+      const timeCheck = await this.checkAndHandleTimeRestrictions(campaignId);
+      
+      if (!timeCheck.shouldProcess) {
+        console.log(`Cannot resume campaign ${campaignId} - still outside allowed hours`);
+        // Keep it paused with the same reason
+        await Campaign.findByIdAndUpdate(campaignId, {
+          status: 'paused',
+          pauseReason: 'outside_allowed_hours',
+          updatedAt: new Date()
+        });
+        throw new Error('Cannot resume campaign outside allowed hours');
+      }
+      
+      // If we're now within hours, clear the pause reason and continue
+      console.log(`Campaign ${campaignId} is now within allowed hours, proceeding with resume`);
+    }
+
     // Unpause queue (if exists) and add job again to resume processing
     const queueName = `campaign-${campaignId}`;
     let queue = this.queues.get(queueName);
@@ -957,19 +1056,31 @@ async checkTimeRestrictions(campaignId) {
       jobId: `process-campaign-resume-${campaignId}-${Date.now()}`
     });
 
-    // Update campaign status
-    await Campaign.findByIdAndUpdate(campaignId, {
+    // Update campaign status - clear pause reason if it was for time restrictions
+    const updateData = {
       status: 'active',
-      pauseReason: null,
-      resumedAt: new Date()
-    });
+      resumedAt: new Date(),
+      updatedAt: new Date()
+    };
+    
+    // Only clear pause reason if it was for time restrictions
+    if (campaign.pauseReason === 'outside_allowed_hours') {
+      updateData.pauseReason = null;
+    }
+
+    await Campaign.findByIdAndUpdate(campaignId, updateData);
 
     // Emit resume events via socket
     await this.emitCampaignStatusChange(campaignId, 'paused', 'active', 'campaign_resumed');
     await this.emitCampaignProgress(campaignId);
 
-    console.log(`Campaign ${campaignId} resumed`);
+    console.log(`Campaign ${campaignId} resumed successfully`);
+    
+  } catch (error) {
+    console.error(`Error resuming campaign ${campaignId}:`, error);
+    throw error;
   }
+}
 
   // Stop campaign (obliterate queue + close worker)
   async stopCampaign(campaignId) {
@@ -1017,26 +1128,6 @@ async checkTimeRestrictions(campaignId) {
 
     console.log(`Campaign ${campaignId} stopped`);
   }
-
-  // Update campaign stats (incremental updates)
-  // async updateCampaignStats(campaignId, updates) {
-  //   const updateData = {
-  //     $inc: updates,
-  //     $set: { updatedAt: new Date() }
-  //   };
-
-  //   if (updates.sentMessages) {
-  //     updateData.$inc.sentMessagesToday = updates.sentMessages;
-  //     updateData.$inc.deliveredMessages = updates.sentMessages;
-  //   }
-
-  //   // Also increment sentCount for progress tracking if sentMessages present
-  //   if (!updateData.$inc.sentCount && updates.sentMessages) {
-  //     updateData.$inc.sentCount = updates.sentMessages;
-  //   }
-
-  //   await Campaign.findByIdAndUpdate(campaignId, updateData);
-  // }
 
   // Update SIM daily count
   async updateSimDailyCount(simId) {
@@ -1276,12 +1367,35 @@ async checkTimeRestrictions(campaignId) {
     }
   }
 
-
   // Reset variant round-robin index for a campaign
   async resetVariantRoundRobin(campaignId) {
     this.variantRoundRobinIndex.set(campaignId, 0);
     console.log(`Reset variant round-robin index for campaign ${campaignId}`);
     return { success: true };
+  }
+
+  // NEW: Check all campaigns for time restrictions (to be called by cron job)
+  async checkAllCampaignTimeRestrictions() {
+    try {
+      const campaigns = await Campaign.find({
+        status: { $in: ['active', 'paused'] },
+        'taskSettings.timeRestrictions.enabled': true
+      });
+      
+      console.log(`Checking time restrictions for ${campaigns.length} campaigns`);
+      
+      for (const campaign of campaigns) {
+        try {
+          await this.checkAndHandleTimeRestrictions(campaign._id);
+        } catch (error) {
+          console.error(`Error checking time restrictions for campaign ${campaign._id}:`, error);
+        }
+      }
+      
+      console.log('Completed time restriction checks for all campaigns');
+    } catch (error) {
+      console.error('Error checking all campaign time restrictions:', error);
+    }
   }
 }
 

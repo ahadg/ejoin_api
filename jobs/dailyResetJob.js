@@ -17,7 +17,7 @@ cron.schedule('0 * * * *',
 
     for (const campaign of campaigns) {
       try {
-        await CampaignService.checkTimeRestrictions(campaign._id);
+        await CampaignService.checkAndHandleTimeRestrictions(campaign._id);
       } catch (error) {
         console.error(`Error processing time restrictions for campaign ${campaign._id}:`, error);
       }
