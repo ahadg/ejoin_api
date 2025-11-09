@@ -140,7 +140,7 @@ class MessageTrackingService {
         campaignUpdate.$inc = { 
           deliveredMessages: 1,
           //sentCount : 1,
-          sentMessagesToday : 1,
+          //sentMessagesToday : 1,
          };
         break;
       case 'failed': 
