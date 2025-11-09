@@ -139,7 +139,7 @@ messageSentdetailschema.index({ user: 1, createdAt: -1 });
 messageSentdetailschema.index({ phoneNumber: 1, createdAt: -1 });
 messageSentdetailschema.index({ createdAt: -1 });
 messageSentdetailschema.index({ taskId: -1 });
-messageSentdetailschema.index({ 'statusHistory.timestamp': -1 });
+//messageSentdetailschema.index({ 'statusHistory.timestamp': -1 });
 
 // Pre-save middleware to generate content hash
 messageSentdetailschema.pre('save', function(next) {

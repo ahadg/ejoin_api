@@ -54,7 +54,11 @@ exports.syncDeviceSms = async (device) => {
     const { port, slot, timestamp, from, to, is_report, sms } = msg;
 
     // find/create SIM
-    let sim = await Sim.findOne({ device: device._id, port, slot });
+    let sim = await Sim.findOne({ 
+      device: device._id, 
+      port, 
+    //  slot 
+    });
     if (!sim) {
       sim = await Sim.create({ device: device._id, port, slot });
     }

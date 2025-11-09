@@ -176,7 +176,10 @@ async function processPortStatus(portData) {
 
     // Update existing SIM or create new one
     const simCard = await Sim.findOneAndUpdate(
-      { device: deviceObjectId, port: portNumber, slot: slotNumber },
+      { device: deviceObjectId,
+        port: portNumber, 
+      //  slot: slotNumber 
+      },
       {
         $set: simData,
         $setOnInsert: {

@@ -156,7 +156,7 @@ exports.getConversationMessages = async (req, res) => {
       sim = await Sim.findOne({
         device: deviceId,
         port: parseInt(port),
-        slot: parseInt(slot)
+        //slot: parseInt(slot)
       }).select("_id port slot phoneNumber");
     }
 
@@ -231,7 +231,7 @@ exports.sendSMS = async (req, res) => {
     const sim = await Sim.findOne({ 
       device: deviceId, 
       port: parseInt(port), 
-      slot: parseInt(slot) 
+      //slot: parseInt(slot) 
     });
     
     if (!sim) {
@@ -242,7 +242,7 @@ exports.sendSMS = async (req, res) => {
     let contact 
     if(!contactId) {
       contact  = await findOrCreateContact(to, userId || (device.user ? device.user.toString() : null));
-    }else {
+    } else {
       contact = { _id : contactId }
     }
 
@@ -442,7 +442,7 @@ exports.deleteConversation = async (req, res) => {
     const sim = await Sim.findOne({ 
       device: deviceId, 
       port: parseInt(port), 
-      slot: parseInt(slot) 
+      //slot: parseInt(slot) 
     });
     
     if (!sim) {
@@ -640,7 +640,11 @@ exports.webhookSMS = async (req, res) => {
       console.log(`📞 Processing SMS from ${from} to ${to} on port ${port}, slot ${slot}`);
 
       // 🔹 Find or create SIM
-      let sim = await Sim.findOne({ device: device._id, port, slot });
+      let sim = await Sim.findOne({
+        device: device._id,
+        port,
+      //  slot 
+      });
       if (!sim) {
         sim = await Sim.create({ 
           device: device._id, 
