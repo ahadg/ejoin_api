@@ -781,12 +781,16 @@ exports.webhookSMS = async (req, res) => {
 
       const lowerMsg = (decodedSMS || '').trim().toLowerCase();
 
-      const stopKeywords = ['stop', 'unsubscribe', 'cancel',
-         //'quit', 'end', 
-         'unsub'];
-      const startKeywords = ['start', 'subscribe', 
+      const stopKeywords = ['stop', 
+        //'unsubscribe', 'cancel',
+        //'quit', 'end', 
+        // 'unsub'
+        ];
+      const startKeywords = ['start', 
+        //'subscribe', 
         //'yes', 'unstop', 
-        'resubscribe'];
+        //'resubscribe'
+      ];
       
       const isStopMessage = stopKeywords.some(word => lowerMsg.includes(word));
       const isStartMessage = startKeywords.some(word => lowerMsg.includes(word));
