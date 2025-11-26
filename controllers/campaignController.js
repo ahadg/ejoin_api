@@ -41,12 +41,12 @@ exports.getCampaigns = async (req, res) => {
 // Get campaign by ID
 exports.getCampaignById = async (req, res) => {
   try {
-    const campaign = await Campaign.findOne({ 
-      _id: req.params.id, 
-      user: req.user._id 
+    const campaign = await Campaign.findOne({
+      _id: req.params.id,
+      user: req.user._id
     })
-    .populate('contactList')
-    .populate('device');
+      .populate('contactList')
+      .populate('device');
 
     if (!campaign) {
       return res.status(404).json({ code: 404, reason: 'Campaign not found' });
@@ -132,7 +132,7 @@ exports.updateCampaign = async (req, res) => {
     const campaign = await Campaign.findOneAndUpdate(
       { _id: req.params.id, user: req.user._id },
       {
-        totalContacts : contactListData?.optedInCount,
+        totalContacts: contactListData?.optedInCount,
         name, contactList, device, status, taskId,
         messageContent, scheduledDate, priority, taskSettings,
         updatedAt: new Date(),
@@ -331,7 +331,7 @@ exports.smsStatusWebhook = async (req, res) => {
       const deliveryPromises = sdr.map(async (delivery) => {
         try {
           const { number, ts, code } = delivery;
-          
+
           // Find the message by phone number and taskId
           const messageDetail = await MessageSentDetails.findOne({
             taskId: tid.toString(),
@@ -363,7 +363,7 @@ exports.smsStatusWebhook = async (req, res) => {
       const failurePromises = fdr.map(async (failure) => {
         try {
           const { number, ts, code, gsm_cause } = failure;
-          
+
           // Find the message by phone number and taskId
           const messageDetail = await MessageSentDetails.findOne({
             taskId: tid.toString(),
@@ -418,7 +418,7 @@ exports.smsStatusWebhook = async (req, res) => {
       // };
 
       // Execute all updates
-      const [deliveryResults, failureResults, 
+      const [deliveryResults, failureResults,
         //sentResults
 
       ] = await Promise.all([

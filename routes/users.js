@@ -11,7 +11,7 @@ router.use(auth);
 // Get all users (Admin only)
 router.get('/', isAdmin, async (req, res) => {
     try {
-        const users = await User.find()
+        const users = await User.find({ createdBy: req.user.id })
             .select('-password -resetPasswordToken -resetPasswordExpires')
             .populate('assignedSims', 'phoneNumber operator status port slot')
             .populate('createdBy', 'name email')
@@ -66,7 +66,7 @@ router.post('/', isAdmin, async (req, res) => {
             email,
             password,
             role: role || 'user',
-            createdBy: req.user._id
+            createdBy: req.user.id
         });
 
         await user.save();

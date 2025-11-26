@@ -43,7 +43,7 @@ exports.getSMS = async (req, res) => {
 exports.getConversations = async (req, res) => {
   try {
     const { deviceId } = req.query;
-    
+
     if (!deviceId) {
       return res.status(400).json({ code: 400, reason: "deviceId is required" });
     }
@@ -209,15 +209,14 @@ exports.getConversationMessages = async (req, res) => {
 
 
 // ================== Send SMS ==================
-// ================== Send SMS ==================
 exports.sendSMS = async (req, res) => {
   try {
-    const { deviceId, port, slot, to, sms, userId,contactId } = req.body;
+    const { deviceId, port, slot, to, sms, userId, contactId } = req.body;
 
     if (!deviceId || !port || !slot || !to || !sms) {
-      return res.status(400).json({ 
-        code: 400, 
-        reason: "deviceId, port, slot, to, and sms are required" 
+      return res.status(400).json({
+        code: 400,
+        reason: "deviceId, port, slot, to, and sms are required"
       });
     }
 
@@ -228,22 +227,22 @@ exports.sendSMS = async (req, res) => {
     }
 
     // Find the SIM for the specified port and slot
-    const sim = await Sim.findOne({ 
-      device: deviceId, 
-      port: parseInt(port), 
+    const sim = await Sim.findOne({
+      device: deviceId,
+      port: parseInt(port),
       //slot: parseInt(slot) 
     });
-    
+
     if (!sim) {
       return res.status(404).json({ code: 404, reason: "SIM not found for specified port and slot" });
     }
 
     // Find or create contact for recipient
-    let contact 
-    if(!contactId) {
-      contact  = await findOrCreateContact(to, userId || (device.user ? device.user.toString() : null));
+    let contact
+    if (!contactId) {
+      contact = await findOrCreateContact(to, userId || (device.user ? device.user.toString() : null));
     } else {
-      contact = { _id : contactId }
+      contact = { _id: contactId }
     }
 
     // Save the outgoing message to database with contact reference
@@ -266,17 +265,17 @@ exports.sendSMS = async (req, res) => {
       .populate("sim")
       .populate("contact");
 
-    res.status(201).json({ 
-      code: 201, 
-      success: true, 
-      data: { message: populatedMessage } 
+    res.status(201).json({
+      code: 201,
+      success: true,
+      data: { message: populatedMessage }
     });
 
   } catch (err) {
     console.error("Send SMS Error:", err);
-    res.status(500).json({ 
-      code: 500, 
-      reason: "Failed to save SMS to database: " + err.message 
+    res.status(500).json({
+      code: 500,
+      reason: "Failed to save SMS to database: " + err.message
     });
   }
 };
@@ -284,7 +283,7 @@ exports.sendSMS = async (req, res) => {
 // ================== Create SMS ==================
 exports.createSms = async (req, res) => {
 
-  console.log("createSms",req.body)
+  console.log("createSms", req.body)
   try {
     const { simId, from, to, sms, isReport = false, rawSms, userId } = req.body;
 
@@ -337,8 +336,8 @@ exports.markAsRead = async (req, res) => {
       { read: true },
       { new: true }
     )
-    .populate("sim")
-    .populate("contact");
+      .populate("sim")
+      .populate("contact");
 
     if (!message) {
       return res.status(404).json({ code: 404, reason: "Message not found" });
@@ -368,21 +367,21 @@ exports.markConversationAsRead = async (req, res) => {
         slot,
         read: false
       },
-      { 
-        $set: { 
+      {
+        $set: {
           read: true,
           readAt: new Date()
-        } 
+        }
       }
     );
 
-    res.json({ 
-      code: 200, 
-      success: true, 
-      data: { 
+    res.json({
+      code: 200,
+      success: true,
+      data: {
         modifiedCount: result.modifiedCount,
-        message: `Marked ${result.modifiedCount} messages as read` 
-      } 
+        message: `Marked ${result.modifiedCount} messages as read`
+      }
     });
   } catch (err) {
     console.error("MarkConversationAsRead Error:", err);
@@ -415,10 +414,10 @@ exports.deleteSMS = async (req, res) => {
       return res.status(404).json({ code: 404, reason: "Message not found" });
     }
 
-    res.json({ 
-      code: 200, 
-      success: true, 
-      message: "SMS deleted successfully" 
+    res.json({
+      code: 200,
+      success: true,
+      message: "SMS deleted successfully"
     });
   } catch (err) {
     console.error("Delete SMS Error:", err);
@@ -432,19 +431,19 @@ exports.deleteConversation = async (req, res) => {
     const { phoneNumber, port, slot, deviceId } = req.body;
 
     if (!phoneNumber || !port || !slot || !deviceId) {
-      return res.status(400).json({ 
-        code: 400, 
-        reason: "phoneNumber, port, slot, and deviceId are required" 
+      return res.status(400).json({
+        code: 400,
+        reason: "phoneNumber, port, slot, and deviceId are required"
       });
     }
 
     // Find the SIM
-    const sim = await Sim.findOne({ 
-      device: deviceId, 
-      port: parseInt(port), 
+    const sim = await Sim.findOne({
+      device: deviceId,
+      port: parseInt(port),
       //slot: parseInt(slot) 
     });
-    
+
     if (!sim) {
       return res.status(404).json({ code: 404, reason: "SIM not found" });
     }
@@ -455,12 +454,12 @@ exports.deleteConversation = async (req, res) => {
       from: phoneNumber
     });
 
-    res.json({ 
-      code: 200, 
-      success: true, 
-      data: { 
+    res.json({
+      code: 200,
+      success: true,
+      data: {
         deletedCount: result.deletedCount,
-        message: `Deleted ${result.deletedCount} messages` 
+        message: `Deleted ${result.deletedCount} messages`
       }
     });
   } catch (err) {
@@ -475,7 +474,7 @@ exports.getUnreadCount = async (req, res) => {
     const { deviceId } = req.query;
 
     let query = { read: false };
-    
+
     if (deviceId) {
       const sims = await Sim.find({ device: deviceId }).select("_id");
       query.sim = { $in: sims.map(s => s._id) };
@@ -497,18 +496,18 @@ exports.getUnreadCount = async (req, res) => {
 // Helper function to check if user is viewing conversation
 const isUserViewingConversation = (userSockets, messageData) => {
   const { from, to, direction, port, slot } = messageData;
-  
+
   return userSockets.some(socket => {
     if (!socket.currentConversation) return false;
-    
+
     const conv = socket.currentConversation;
     const messagePhone = direction === 'inbound' ? from : to;
-    
+
     // Check if conversation matches the message
     const phoneMatch = conv.phoneNumber === messagePhone;
     const portMatch = conv.port === port;
     const slotMatch = conv.slot === slot;
-    
+
     return phoneMatch && portMatch && slotMatch;
   });
 };
@@ -516,10 +515,10 @@ const isUserViewingConversation = (userSockets, messageData) => {
 // Helper function to get user online status - FIXED VERSION
 const getUserOnlineStatus = (io, userId, messageData) => {
   const { from, to, port, slot } = messageData;
-  
+
   const userRooms = io.sockets.adapter.rooms.get(`user:${userId}`);
   const isUserOnline = userRooms && userRooms.size > 0;
-  
+
   let isUserOnInbox = false;
   let isViewingThisConversation = false;
   let userSockets = [];
@@ -529,13 +528,13 @@ const getUserOnlineStatus = (io, userId, messageData) => {
     userSockets = Array.from(io.sockets.sockets.values()).filter(
       socket => socket.userId === userId.toString()
     );
-    
+
     // Check if user is on inbox section
-    isUserOnInbox = userSockets.some(socket => 
-      socket.currentSection === 'inbox' || 
+    isUserOnInbox = userSockets.some(socket =>
+      socket.currentSection === 'inbox' ||
       socket.isViewingInbox === true
     );
-    
+
     // Check if user is viewing this specific conversation
     if (isUserOnInbox) {
       isViewingThisConversation = isUserViewingConversation(userSockets, {
@@ -643,16 +642,16 @@ exports.webhookSMS = async (req, res) => {
       let sim = await Sim.findOne({
         device: device._id,
         port,
-      //  slot 
+        //  slot 
       });
       if (!sim) {
-        sim = await Sim.create({ 
-          device: device._id, 
-          port, 
-          slot, 
-          iccid, 
-          imsi, 
-          imei 
+        sim = await Sim.create({
+          device: device._id,
+          port,
+          slot,
+          iccid,
+          imsi,
+          imei
         });
         console.log(`✅ Created new SIM: ${port}-${slot}`);
       }
@@ -673,7 +672,7 @@ exports.webhookSMS = async (req, res) => {
           console.warn('Could not decode SMS as base64, using raw value');
         }
       }
-      console.log("decodedSMS",decodedSMS)
+      console.log("decodedSMS", decodedSMS)
       // 🔹 Check user online status and viewing state
       const userStatus = getUserOnlineStatus(io, device.user._id.toString(), {
         from,
@@ -692,26 +691,26 @@ exports.webhookSMS = async (req, res) => {
         console.log(`🚨 Processing spam report from ${from}`);
 
         await SimMessages.findOneAndUpdate(
-          { 
+          {
             to: from,
             from: to,
             port,
             slot,
             direction: 'outbound'
           },
-          { 
-            $set: { 
+          {
+            $set: {
               status: 'reported',
               isReport: true,
               reportTimestamp: new Date(ts * 1000)
-            } 
+            }
           }
         );
 
         if (contact?.contactList) {
           await updateContactListCounts(contact.contactList);
         }
-      
+
         const reportMessage = await SimMessages.create({
           sim: sim._id,
           contact: contact ? contact._id : undefined,
@@ -726,7 +725,7 @@ exports.webhookSMS = async (req, res) => {
           status: 'delivered',
           isSpamReport: true
         });
-        
+
         const populatedReport = await SimMessages.findById(reportMessage._id)
           .populate("sim")
           .populate("contact");
@@ -761,13 +760,13 @@ exports.webhookSMS = async (req, res) => {
         // ✅ Mark all matching contacts as spam
         await Contact.updateMany(
           { phoneNumber: { $in: phoneMatches } },
-          { 
-            $set: { 
-              isReport: true, 
+          {
+            $set: {
+              isReport: true,
               //optedIn: false,
               isSpam: true,
               lastReported: new Date(ts * 1000)
-            } 
+            }
           }
         );
 
@@ -781,20 +780,20 @@ exports.webhookSMS = async (req, res) => {
 
       const lowerMsg = (decodedSMS || '').trim().toLowerCase();
 
-      const stopKeywords = ['stop', 
+      const stopKeywords = ['stop',
         //'unsubscribe', 'cancel',
         //'quit', 'end', 
         // 'unsub'
-        ];
-      const startKeywords = ['start', 
+      ];
+      const startKeywords = ['start',
         //'subscribe', 
         //'yes', 'unstop', 
         //'resubscribe'
       ];
-      
+
       const isStopMessage = stopKeywords.some(word => lowerMsg.includes(word));
       const isStartMessage = startKeywords.some(word => lowerMsg.includes(word));
-      
+
       console.log(`📨 Processing ${isStopMessage ? 'STOP' : isStartMessage ? 'START' : 'regular'} message from ${from}`);
 
       // 🔹 Save the message
@@ -813,7 +812,7 @@ exports.webhookSMS = async (req, res) => {
         status: isStopMessage ? 'unsubscribed' : isStartMessage ? 'subscribed' : 'delivered',
         isSpamReport: isStopMessage
       });
-      
+
       const populatedMessage = await SimMessages.findById(savedMessage._id)
         .populate("sim")
         .populate("contact");
@@ -889,13 +888,13 @@ exports.webhookSMS = async (req, res) => {
           title: isStopMessage
             ? 'Unsubscribe Message Received'
             : isStartMessage
-            ? 'Resubscribe Message Received'
-            : 'New SMS Received',
+              ? 'Resubscribe Message Received'
+              : 'New SMS Received',
           message: isStopMessage
             ? `From: ${from} - Sent "STOP" to unsubscribe`
             : isStartMessage
-            ? `From: ${from} - Sent "START" to resubscribe`
-            : `From: ${from} - ${decodedSMS?.substring(0, 50) || ''}`,
+              ? `From: ${from} - Sent "START" to resubscribe`
+              : `From: ${from} - ${decodedSMS?.substring(0, 50) || ''}`,
           type: isStopMessage ? 'warning' : isStartMessage ? 'success' : 'info',
           data: {
             messageId: savedMessage._id.toString(),
@@ -935,7 +934,7 @@ async function sendUnsubscribeConfirmation(device, port, toPhoneNumber, original
     const noCountryCode = original.startsWith("1") ? original.slice(1) : original;
     const withCountryCode = original.startsWith("1") ? original : `1${original}`;
     const phoneMatches = [original, noCountryCode, withCountryCode];
-    
+
 
     let contact = await Contact.findOne({ phoneNumber: { $in: phoneMatches } });
     const smsTask = {
@@ -955,7 +954,7 @@ async function sendUnsubscribeConfirmation(device, port, toPhoneNumber, original
     };
 
     console.log(`📤 Sending unsubscribe confirmation to ${toPhoneNumber} on port ${port}`);
-    
+
     const result = await client.sendSms([smsTask]);
     console.log(`✅ Unsubscribe confirmation sent:`, result);
 
@@ -965,7 +964,7 @@ async function sendUnsubscribeConfirmation(device, port, toPhoneNumber, original
       await SimMessages.create({
         sim: sim._id,
         clientNumber: toPhoneNumber,
-        contact : contact?._id,
+        contact: contact?._id,
         timestamp: new Date(),
         from: port.toString(),
         to: toPhoneNumber,
@@ -990,13 +989,13 @@ async function sendResubscribeConfirmation(device, port, toPhoneNumber, original
   try {
     console.log({})
     const client = new DeviceClient(device);
-    
+
     const resubscribeMessage = "You have successfully resubscribed. You will now receive messages from this number. Reply STOP to unsubscribe at any time.";
     const original = toPhoneNumber.replace(/\D/g, ""); // keep only digits
     const noCountryCode = original.startsWith("1") ? original.slice(1) : original;
     const withCountryCode = original.startsWith("1") ? original : `1${original}`;
     const phoneMatches = [original, noCountryCode, withCountryCode];
-    
+
 
     let contact = await Contact.findOne({ phoneNumber: { $in: phoneMatches } });
     const smsTask = {
@@ -1016,7 +1015,7 @@ async function sendResubscribeConfirmation(device, port, toPhoneNumber, original
     };
 
     console.log(`📤 Sending resubscribe confirmation to ${toPhoneNumber} on port ${port}`);
-    
+
     const result = await client.sendSms([smsTask]);
     console.log(`✅ Resubscribe confirmation sent:`, result);
 
@@ -1026,7 +1025,7 @@ async function sendResubscribeConfirmation(device, port, toPhoneNumber, original
       await SimMessages.create({
         sim: sim._id,
         clientNumber: toPhoneNumber,
-        contact : contact?._id,
+        contact: contact?._id,
         timestamp: new Date(),
         from: port.toString(),
         to: toPhoneNumber,
@@ -1050,11 +1049,11 @@ async function sendResubscribeConfirmation(device, port, toPhoneNumber, original
 exports.webhookHealth = async (req, res) => {
   try {
     const io = req.app.get("io");
-    
+
     // Check socket.io connection status
     const socketCount = io.engine.clientsCount;
     const rooms = Array.from(io.sockets.adapter.rooms.keys());
-    
+
     res.status(200).json({
       status: 'healthy',
       timestamp: new Date().toISOString(),

@@ -25,11 +25,11 @@ const campaignSchema = new mongoose.Schema({
   device: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Device',
-    required: true
+    //required: true
   },
   status: {
     type: String,
-    enum: ['scheduled', 'active', 'paused', 'completed', 'cancelled','pending'],
+    enum: ['scheduled', 'active', 'paused', 'completed', 'cancelled', 'pending'],
     default: 'scheduled'
   },
   priority: {
@@ -54,7 +54,7 @@ const campaignSchema = new mongoose.Schema({
       type: mongoose.Schema.Types.ObjectId,
       ref: 'MessageVariant',
     },
-    messageVariationType: { type: String, enum: ['single_variant','multiple_variants', 'ai_random'], default: 'single_variant' },
+    messageVariationType: { type: String, enum: ['single_variant', 'multiple_variants', 'ai_random'], default: 'single_variant' },
     useAiGeneration: { type: Boolean, default: false },
     aiPrompt: { type: String, default: '' },
     companyName: { type: String, default: '' },
@@ -77,16 +77,16 @@ const campaignSchema = new mongoose.Schema({
   sentCount: { type: Number, default: 0 },
   pausedAt: Date,
   resumedAt: Date,
-  
+
   // Timestamps
   scheduledDate: { type: Date },
   processingStartedAt: { type: Date },
   completedAt: { type: Date },
   pauseReason: { type: String },
-  
+
   // Task management
   taskId: [{ type: Number }],
-  
+
   user: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
@@ -103,13 +103,13 @@ campaignSchema.index({ device: 1 });
 campaignSchema.index({ createdAt: -1 });
 
 // Virtual for progress percentage
-campaignSchema.virtual('progress').get(function() {
+campaignSchema.virtual('progress').get(function () {
   if (this.totalContacts === 0) return 0;
   return Math.min(100, (this.sentMessages / this.totalContacts) * 100);
 });
 
 // Method to update delivery rate
-campaignSchema.methods.updateDeliveryRate = function() {
+campaignSchema.methods.updateDeliveryRate = function () {
   if (this.sentMessages > 0) {
     this.deliveryRate = (this.deliveredMessages / this.sentMessages) * 100;
   }

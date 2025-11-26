@@ -6,7 +6,14 @@ const { processDeviceStatus } = require('./Ejoin/statusController');
 // Get all devices for user
 exports.getDevices = async (req, res) => {
   try {
-    const devices = await deviceModel.find({ user: req.user._id }).sort({ createdAt: -1 });
+    let userId = req.user._id;
+
+    // If user role is 'user', get devices from their admin (createdBy)
+    if (req.user.role === 'user' && req.user.createdBy) {
+      userId = req.user.createdBy;
+    }
+
+    const devices = await deviceModel.find({ user: userId }).sort({ createdAt: -1 });
     res.json({ code: 200, data: { devices } });
   } catch (error) {
     console.error('Get devices error:', error);
@@ -34,21 +41,21 @@ exports.createDevice = async (req, res) => {
     const { name, ipAddress, location, totalSlots, dailyLimit, password, port, username } = req.body;
     console.log("/devices/create", req.body);
 
-    const client = new DeviceClient({ipAddress: ipAddress, port: port, username: username, password: password});
-  
+    const client = new DeviceClient({ ipAddress: ipAddress, port: port, username: username, password: password });
+
     // Get current status with additional parameters
-    const params = {username: username, password: password};
-    
+    const params = { username: username, password: password };
+
     const data = await client.getStatus(params);
     console.log("getStatus_data", data);
     let device = null;
     // Process device and SIM data in database
-    if(data?.reason != 'invalid username or password!') {
+    if (data?.reason != 'invalid username or password!') {
       device = new deviceModel({
         name,
         ipAddress,
         location,
-        totalSlots : data['max-ports'],
+        totalSlots: data['max-ports'],
         dailyLimit,
         password,
         port,
@@ -64,12 +71,12 @@ exports.createDevice = async (req, res) => {
         updatedAt: new Date()
         //...data
       });
-  
+
       // Fire and forget sync
       //syncDeviceSms(device);
-  
+
       await device.save();
-      processDeviceStatus(data,device);
+      processDeviceStatus(data, device);
     } else {
       return res.status(500).json({ code: 500, reason: 'invalid username or password!' });
     }
