@@ -25,7 +25,6 @@ const campaignSchema = new mongoose.Schema({
   device: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Device',
-    //required: true
   },
   status: {
     type: String,
@@ -36,6 +35,21 @@ const campaignSchema = new mongoose.Schema({
     type: String,
     enum: ['low', 'normal', 'high'],
     default: 'normal'
+  },
+  // Add the new field
+  startAfterPrevious: {
+    type: Boolean,
+    default: false
+  },
+  // Add reference to the previous campaign
+  previousCampaign: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Campaign'
+  },
+  // Add field to track if this campaign is waiting for previous
+  waitingForPrevious: {
+    type: Boolean,
+    default: false
   },
   taskSettings: {
     interval_min: { type: Number, default: 30000 },
@@ -60,8 +74,8 @@ const campaignSchema = new mongoose.Schema({
     companyName: { type: String, default: '' },
     timeRestrictions: {
       enabled: { type: Boolean, default: false },
-      startHour: { type: Number, min: 0, max: 23, default: 9 }, // 9 AM
-      endHour: { type: Number, min: 0, max: 23, default: 17 },  // 5 PM
+      startHour: { type: Number, min: 0, max: 23, default: 9 },
+      endHour: { type: Number, min: 0, max: 23, default: 17 },
       timezone: { type: String, default: 'America/Toronto' }
     }
   },
@@ -72,8 +86,6 @@ const campaignSchema = new mongoose.Schema({
   deliveredMessages: { type: Number, default: 0 },
   failedMessages: { type: Number, default: 0 },
   deliveryRate: { type: Number, default: 0 },
-
-
   sentCount: { type: Number, default: 0 },
   pausedAt: Date,
   resumedAt: Date,
