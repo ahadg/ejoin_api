@@ -1,5 +1,4 @@
 // services/campaignService.js
-const { Worker, Queue } = require('bullmq');
 const Campaign = require('../models/Campaign');
 const ContactList = require('../models/ContactList');
 const Contact = require('../models/Contact');
@@ -15,7 +14,7 @@ class CampaignService {
   constructor() {
     this.queues = new Map();   // queueName -> Queue
     this.workers = new Map();  // queueName -> Worker
-    this.messageTracking = messageTrackingService; 
+    this.messageTracking = messageTrackingService;
     this.simRoundRobinIndex = new Map(); // campaignId -> current SIM index
     this.variantRoundRobinIndex = new Map(); // campaignId -> current variant index
     this.init();
@@ -88,7 +87,7 @@ class CampaignService {
       for (const sim of sims) {
         // Reset daily count if it's a new day
         await this.resetSimDailyCountIfNeeded(sim);
-        
+
         if (sim.dailySent < sim.dailyLimit) {
           availableSims.push(sim);
         }
@@ -109,7 +108,7 @@ class CampaignService {
   async resetSimDailyCountIfNeeded(sim) {
     const today = new Date().toDateString();
     const lastReset = sim.lastResetDate.toDateString();
-    
+
     if (today !== lastReset) {
       await Sim.findByIdAndUpdate(sim._id, {
         dailySent: 0,
@@ -125,21 +124,21 @@ class CampaignService {
       // Check if contact already has an assigned SIM
       if (contact.assignedSim?.simId) {
         const assignedSim = await Sim.findById(contact.assignedSim.simId);
-        
+
         // Verify the SIM is still available and within limits
-        if (assignedSim && 
-            assignedSim.device.toString() === deviceId.toString() &&
-            assignedSim.inserted && 
-            assignedSim.slotActive && 
-            assignedSim.status === 'active') {
-          
+        if (assignedSim &&
+          assignedSim.device.toString() === deviceId.toString() &&
+          assignedSim.inserted &&
+          assignedSim.slotActive &&
+          assignedSim.status === 'active') {
+
           // Check if SIM is within daily limits
           if (assignedSim.dailySent < assignedSim.dailyLimit) {
             console.log(`Using assigned SIM ${assignedSim._id} for contact ${contact.phoneNumber}`);
-            
+
             // Update last used timestamp
             await this.updateContactSimUsage(contact._id, assignedSim._id);
-            
+
             return assignedSim;
           } else {
             console.log(`Assigned SIM ${assignedSim._id} reached daily limit for contact ${contact.phoneNumber}`);
@@ -148,48 +147,48 @@ class CampaignService {
           console.log(`Assigned SIM not available for contact ${contact.phoneNumber}, finding new SIM`);
         }
       }
-      
+
       // If no assigned SIM or assigned SIM is not available, get next available SIM
       const availableSims = await this.getAvailableSims(deviceId, campaignId);
-      
+
       if (availableSims.length === 0) {
         throw new Error(`No available SIMs found for device ${deviceId}`);
       }
-      
+
       // Use round-robin to select a SIM
       if (!this.simRoundRobinIndex.has(campaignId)) {
         this.simRoundRobinIndex.set(campaignId, 0);
       }
-      
+
       let currentIndex = this.simRoundRobinIndex.get(campaignId);
       let selectedSim = null;
       let attempts = 0;
-      
+
       while (attempts < availableSims.length && !selectedSim) {
         const sim = availableSims[currentIndex];
         const freshSim = await Sim.findById(sim._id);
-        
+
         if (freshSim && freshSim.dailySent < freshSim.dailyLimit) {
           selectedSim = freshSim;
           // Update index for next call
           const nextIndex = (currentIndex + 1) % availableSims.length;
           this.simRoundRobinIndex.set(campaignId, nextIndex);
         }
-        
+
         currentIndex = (currentIndex + 1) % availableSims.length;
         attempts++;
       }
-      
+
       if (!selectedSim) {
         throw new Error('No available SIMs found within daily limits');
       }
-      
+
       // Assign this SIM to the contact for future messages
       await this.assignSimToContact(contact._id, selectedSim._id, deviceId);
       console.log(`Assigned new SIM ${selectedSim._id} to contact ${contact.phoneNumber}`);
-      
+
       return selectedSim;
-      
+
     } catch (error) {
       console.error('Error getting SIM for contact:', error);
       throw error;
@@ -238,7 +237,7 @@ class CampaignService {
     try {
       const now = new Date();
       const timezone = timeRestrictions.timezone || 'America/Toronto';
-      
+
       // Convert current time to target timezone using proper method
       const formatter = new Intl.DateTimeFormat('en-US', {
         timeZone: timezone,
@@ -246,19 +245,19 @@ class CampaignService {
         hour12: false,
         minute: '2-digit'
       });
-      
+
       const parts = formatter.formatToParts(now);
       const hour = parseInt(parts.find(part => part.type === 'hour').value);
       const minute = parseInt(parts.find(part => part.type === 'minute').value);
       const currentTimeInMinutes = hour * 60 + minute;
-      
+
       const startHour = timeRestrictions.startHour || 9;
       const endHour = timeRestrictions.endHour || 17;
       const startTimeInMinutes = startHour * 60;
       const endTimeInMinutes = endHour * 60;
-      
+
       console.log(`Time check - Current: ${hour}:${minute} (${currentTimeInMinutes}min), Allowed: ${startHour}:00-${endHour}:00 (${startTimeInMinutes}-${endTimeInMinutes}min), Timezone: ${timezone}`);
-      
+
       // Handle normal time ranges
       if (startTimeInMinutes <= endTimeInMinutes) {
         return currentTimeInMinutes >= startTimeInMinutes && currentTimeInMinutes < endTimeInMinutes;
@@ -272,91 +271,91 @@ class CampaignService {
     }
   }
 
- // FIXED: Enhanced time restriction check with better state management
-async checkAndHandleTimeRestrictions(campaignId) {
-  try {
-    const campaign = await Campaign.findById(campaignId);
-    if (!campaign || !campaign.taskSettings?.timeRestrictions?.enabled) {
-      return { shouldProcess: true, reason: 'no_restrictions' };
-    }
-
-    const timeRestrictions = campaign.taskSettings.timeRestrictions;
-    const isWithinHours = this.isWithinAllowedHours(timeRestrictions);
-    
-    console.log(`Time restriction check for campaign ${campaignId}:`, {
-      enabled: timeRestrictions.enabled,
-      timezone: timeRestrictions.timezone,
-      startHour: timeRestrictions.startHour,
-      endHour: timeRestrictions.endHour,
-      isWithinHours,
-      currentStatus: campaign.status,
-      pauseReason: campaign.pauseReason
-    });
-
-    // Handle auto-pause when outside hours
-    if (campaign.status === 'active' && !isWithinHours) {
-      console.log(`Auto-pausing campaign ${campaignId} - outside allowed hours`);
-      await Campaign.findByIdAndUpdate(campaignId, {
-        status: 'paused',
-        pauseReason: 'outside_allowed_hours',
-        pausedAt: new Date(),
-        updatedAt: new Date()
-      });
-      
-      // Pause the queue to stop processing
-      const queueName = `campaign-${campaignId}`;
-      const queue = this.queues.get(queueName);
-      if (queue) {
-        try {
-          await queue.pause();
-        } catch (err) {
-          console.error(`Error pausing queue ${queueName}:`, err);
-        }
+  // FIXED: Enhanced time restriction check with better state management
+  async checkAndHandleTimeRestrictions(campaignId) {
+    try {
+      const campaign = await Campaign.findById(campaignId);
+      if (!campaign || !campaign.taskSettings?.timeRestrictions?.enabled) {
+        return { shouldProcess: true, reason: 'no_restrictions' };
       }
-      
-      await this.emitCampaignStatusChange(campaignId, 'active', 'paused', 'outside_allowed_hours');
-      return { shouldProcess: false, reason: 'outside_hours_paused' };
-    }
-    
-    // Handle auto-resume when back within hours
-    if (campaign.status === 'paused' && 
-        campaign.pauseReason === 'outside_allowed_hours' && 
+
+      const timeRestrictions = campaign.taskSettings.timeRestrictions;
+      const isWithinHours = this.isWithinAllowedHours(timeRestrictions);
+
+      console.log(`Time restriction check for campaign ${campaignId}:`, {
+        enabled: timeRestrictions.enabled,
+        timezone: timeRestrictions.timezone,
+        startHour: timeRestrictions.startHour,
+        endHour: timeRestrictions.endHour,
+        isWithinHours,
+        currentStatus: campaign.status,
+        pauseReason: campaign.pauseReason
+      });
+
+      // Handle auto-pause when outside hours
+      if (campaign.status === 'active' && !isWithinHours) {
+        console.log(`Auto-pausing campaign ${campaignId} - outside allowed hours`);
+        await Campaign.findByIdAndUpdate(campaignId, {
+          status: 'paused',
+          pauseReason: 'outside_allowed_hours',
+          pausedAt: new Date(),
+          updatedAt: new Date()
+        });
+
+        // Pause the queue to stop processing
+        const queueName = `campaign-${campaignId}`;
+        const queue = this.queues.get(queueName);
+        if (queue) {
+          try {
+            await queue.pause();
+          } catch (err) {
+            console.error(`Error pausing queue ${queueName}:`, err);
+          }
+        }
+
+        await this.emitCampaignStatusChange(campaignId, 'active', 'paused', 'outside_allowed_hours');
+        return { shouldProcess: false, reason: 'outside_hours_paused' };
+      }
+
+      // Handle auto-resume when back within hours
+      if (campaign.status === 'paused' &&
+        campaign.pauseReason === 'outside_allowed_hours' &&
         isWithinHours) {
-      console.log(`Auto-resuming campaign ${campaignId} - within allowed hours`);
-      
-      // Resume the queue
-      const queueName = `campaign-${campaignId}`;
-      const queue = this.queues.get(queueName);
-      if (queue) {
-        try {
-          await queue.resume();
-        } catch (err) {
-          console.error(`Error resuming queue ${queueName}:`, err);
+        console.log(`Auto-resuming campaign ${campaignId} - within allowed hours`);
+
+        // Resume the queue
+        const queueName = `campaign-${campaignId}`;
+        const queue = this.queues.get(queueName);
+        if (queue) {
+          try {
+            await queue.resume();
+          } catch (err) {
+            console.error(`Error resuming queue ${queueName}:`, err);
+          }
         }
+
+        await Campaign.findByIdAndUpdate(campaignId, {
+          status: 'active',
+          pauseReason: null,
+          resumedAt: new Date(),
+          updatedAt: new Date()
+        });
+
+        await this.emitCampaignStatusChange(campaignId, 'paused', 'active', 'within_hours_auto_resume');
+        return { shouldProcess: true, reason: 'within_hours_resumed' };
       }
-      
-      await Campaign.findByIdAndUpdate(campaignId, {
-        status: 'active',
-        pauseReason: null,
-        resumedAt: new Date(),
-        updatedAt: new Date()
-      });
-      
-      await this.emitCampaignStatusChange(campaignId, 'paused', 'active', 'within_hours_auto_resume');
-      return { shouldProcess: true, reason: 'within_hours_resumed' };
-    }
 
-    // If campaign is paused for time restrictions and still outside hours, don't process
-    if (campaign.status === 'paused' && campaign.pauseReason === 'outside_allowed_hours' && !isWithinHours) {
-      return { shouldProcess: false, reason: 'still_outside_hours' };
-    }
+      // If campaign is paused for time restrictions and still outside hours, don't process
+      if (campaign.status === 'paused' && campaign.pauseReason === 'outside_allowed_hours' && !isWithinHours) {
+        return { shouldProcess: false, reason: 'still_outside_hours' };
+      }
 
-    return { shouldProcess: isWithinHours, reason: isWithinHours ? 'within_hours' : 'outside_hours' };
-  } catch (error) {
-    console.error(`Error checking time restrictions for campaign ${campaignId}:`, error);
-    return { shouldProcess: true, reason: 'error_default_allow' };
+      return { shouldProcess: isWithinHours, reason: isWithinHours ? 'within_hours' : 'outside_hours' };
+    } catch (error) {
+      console.error(`Error checking time restrictions for campaign ${campaignId}:`, error);
+      return { shouldProcess: true, reason: 'error_default_allow' };
+    }
   }
-}
 
   // Emit campaign progress via socket.io
   async emitCampaignProgress(campaignId) {
@@ -365,7 +364,7 @@ async checkAndHandleTimeRestrictions(campaignId) {
       const campaign = await Campaign.findById(campaignId)
         .populate('user', '_id')
         .populate('contactList');
-      
+
       if (!campaign || !campaign.user) {
         console.log(`Campaign or user not found for progress emission: ${campaignId}`);
         return;
@@ -397,7 +396,7 @@ async checkAndHandleTimeRestrictions(campaignId) {
 
       // Emit to user-specific room
       io.to(`user:${campaign.user._id}`).emit("campaign-update", updateData);
-      
+
       console.log(`Progress emitted for campaign ${campaignId}: ${progress}% (Status: ${campaign.status})`);
     } catch (error) {
       console.error(`Error emitting campaign progress for ${campaignId}:`, error);
@@ -409,7 +408,7 @@ async checkAndHandleTimeRestrictions(campaignId) {
     try {
       const { io } = require('../app');
       const campaign = await Campaign.findById(campaignId).populate('user', '_id');
-      
+
       if (!campaign || !campaign.user) return;
 
       const statusData = {
@@ -527,9 +526,9 @@ async checkAndHandleTimeRestrictions(campaignId) {
       contactList: campaign.contactList._id,
       optedIn: true
     })
-    .populate('assignedSim.simId')
-    .sort({ _id: 1 })
-    .lean();
+      .populate('assignedSim.simId')
+      .sort({ _id: 1 })
+      .lean();
 
     if (!contacts || contacts.length === 0) {
       console.log(`No opted-in contacts for campaign ${campaignId}`);
@@ -548,9 +547,9 @@ async checkAndHandleTimeRestrictions(campaignId) {
     }
 
     // Ensure campaign status
-    await Campaign.findByIdAndUpdate(campaignId, { 
-      status: 'active', 
-      processingStartedAt: campaign.processingStartedAt || new Date() 
+    await Campaign.findByIdAndUpdate(campaignId, {
+      status: 'active',
+      processingStartedAt: campaign.processingStartedAt || new Date()
     });
     await this.emitCampaignProgress(campaignId);
 
@@ -593,7 +592,7 @@ async checkAndHandleTimeRestrictions(campaignId) {
         await this.pauseCampaign(campaignId, 'daily_limit_reached');
         return;
       }
-      console.log("SIM selected sim.port",sim.port.toString())
+      console.log("SIM selected sim.port", sim.port.toString())
 
       // Generate message variant
       const finalMessage = await this.generateMessageVariant(campaignId, campaign.taskSettings || {}, contact);
@@ -622,7 +621,7 @@ async checkAndHandleTimeRestrictions(campaignId) {
 
         const processingTime = Date.now() - processingStartTime;
 
-        if (ejoinResponse?.[0]?.reason === "OK") {  
+        if (ejoinResponse?.[0]?.reason === "OK") {
           // Update campaign stats and SIM counters
           await this.updateSimDailyCount(sim._id);
 
@@ -633,12 +632,12 @@ async checkAndHandleTimeRestrictions(campaignId) {
 
           // Track successful message
           await this.trackMessageEvent(
-            campaignId, 
-            contact, 
-            finalMessage, 
-            'sent', 
-            ejoinResponse, 
-            null, 
+            campaignId,
+            contact,
+            finalMessage,
+            'sent',
+            ejoinResponse,
+            null,
             processingTime,
             sim._id,
             ejoinResponse?.[0]?.id
@@ -657,12 +656,12 @@ async checkAndHandleTimeRestrictions(campaignId) {
 
           // Track failed message
           await this.trackMessageEvent(
-            campaignId, 
-            contact, 
-            finalMessage, 
-            'failed', 
-            ejoinResponse, 
-            ejoinResponse?.[0]?.reason || 'Unknown error', 
+            campaignId,
+            contact,
+            finalMessage,
+            'failed',
+            ejoinResponse,
+            ejoinResponse?.[0]?.reason || 'Unknown error',
             processingTime,
             sim._id,
             ejoinResponse?.[0]?.id
@@ -678,12 +677,12 @@ async checkAndHandleTimeRestrictions(campaignId) {
 
         // Track errored message
         await this.trackMessageEvent(
-          campaignId, 
-          contact, 
-          finalMessage, 
-          'failed', 
-          null, 
-          err.message, 
+          campaignId,
+          contact,
+          finalMessage,
+          'failed',
+          null,
+          err.message,
           processingTime,
           sim._id,
           null
@@ -708,11 +707,11 @@ async checkAndHandleTimeRestrictions(campaignId) {
       status: 'completed',
       completedAt: new Date()
     });
-    
+
     // Emit final progress update
     await this.emitCampaignProgress(campaignId);
     await this.emitCampaignStatusChange(campaignId, 'active', 'completed', 'campaign_finished');
-    
+
     console.log(`Campaign ${campaignId} completed successfully`);
     return;
   }
@@ -725,14 +724,14 @@ async checkAndHandleTimeRestrictions(campaignId) {
         path: 'message',
         populate: { path: 'variants', model: 'MessageVariant' }
       });
-  
-    console.log("generateMessageVariant_start", { 
-      campaignId, 
+
+    console.log("generateMessageVariant_start", {
+      campaignId,
       messageVariationType: campaign?.taskSettings?.messageVariationType,
       useAiGeneration: campaign?.taskSettings?.useAiGeneration,
-      contact: contact?.phoneNumber 
+      contact: contact?.phoneNumber
     });
-  
+
     // Handle single_variant type - use campaign's messageContent
     if (campaign?.taskSettings?.messageVariationType === 'single_variant') {
       console.log("Using single variant from messageContent");
@@ -743,7 +742,7 @@ async checkAndHandleTimeRestrictions(campaignId) {
         characterCount: (campaign.messageContent || 'Default message').length
       };
     }
-  
+
     // Handle multiple_variants type - use round-robin selection from message variants
     if (campaign?.taskSettings?.messageVariationType === 'multiple_variants') {
       if (campaign?.message?.variants && campaign.message.variants.length > 0) {
@@ -751,22 +750,22 @@ async checkAndHandleTimeRestrictions(campaignId) {
         if (!this.variantRoundRobinIndex.has(campaignId)) {
           this.variantRoundRobinIndex.set(campaignId, 0);
         }
-  
+
         // Get current index and select variant
         const currentIndex = this.variantRoundRobinIndex.get(campaignId);
         const selectedVariant = campaign.message.variants[currentIndex];
-        
+
         // Update index for next call (circular)
         const nextIndex = (currentIndex + 1) % campaign.message.variants.length;
         this.variantRoundRobinIndex.set(campaignId, nextIndex);
-  
+
         console.log("Selected round-robin variant:", {
           variantId: selectedVariant._id,
           index: currentIndex,
           totalVariants: campaign.message.variants.length,
           nextIndex: nextIndex
         });
-  
+
         return {
           content: selectedVariant.content,
           variantId: selectedVariant._id,
@@ -783,20 +782,20 @@ async checkAndHandleTimeRestrictions(campaignId) {
         };
       }
     }
-  
+
     // Handle ai_random type - generate AI variant (without uniqueness check)
-    if (campaign?.taskSettings?.messageVariationType === 'ai_random' || 
-        campaign?.taskSettings?.useAiGeneration) {
-      
+    if (campaign?.taskSettings?.messageVariationType === 'ai_random' ||
+      campaign?.taskSettings?.useAiGeneration) {
+
       console.log("current_campaign:", campaign);
       console.log("current_campaign_message:", campaign?.message);
       console.log("current_campaign_message_settings:", campaign?.message?.settings);
       console.log("current_campaign_message_characterLimit:", campaign?.message?.settings?.characterLimit);
-  
+
       // Get previous messages to guide AI generation (but no uniqueness enforcement)
       const previousMessages = await this.getPreviousCampaignMessages(campaignId);
       console.log(`Found ${previousMessages.length} previous messages for context`);
-  
+
       // Use the AI generation controller with previous messages as context only
       try {
         const aiResponse = await aiGenerationController.generateWithGrok({
@@ -808,19 +807,19 @@ async checkAndHandleTimeRestrictions(campaignId) {
           creativityLevel: campaign?.message?.settings?.get("creativityLevel"),
           includeEmojis: campaign?.message?.settings?.get("includeEmojis"),
           companyName: campaign?.message?.settings?.get("companyName") || '',
-          companyAddress : campaign?.message?.settings?.get("companyAddress") || '',
-          companyEmail : campaign?.message?.settings?.get("companyEmail") || '',
-          companyPhone : campaign?.message?.settings?.get("companyPhone") || '',
-          companyWebsite : campaign?.message?.settings?.get("companyWebsite") || '',
+          companyAddress: campaign?.message?.settings?.get("companyAddress") || '',
+          companyEmail: campaign?.message?.settings?.get("companyEmail") || '',
+          companyPhone: campaign?.message?.settings?.get("companyPhone") || '',
+          companyWebsite: campaign?.message?.settings?.get("companyWebsite") || '',
           unsubscribeText: campaign?.message?.settings?.get("unsubscribeText"),
           customInstructions: campaign?.message?.settings?.get("customInstructions"),
           category: campaign?.message?.category,
           previousMessages: previousMessages // Pass previous messages for context only
         });
-        
+
         console.log("aiResponse", aiResponse);
         console.log("aiResponse_content", aiResponse?.[0]?.content);
-  
+
         if (aiResponse && aiResponse[0]?.content) {
           const variant = aiResponse?.[0];
           console.log("AI variant generated successfully");
@@ -835,20 +834,20 @@ async checkAndHandleTimeRestrictions(campaignId) {
         console.error('AI message generation failed, using fallback:', error);
         // Fall through to fallback options
       }
-  
+
       // AI fallback: use round-robin for message variants if available
       if (campaign?.message?.variants && campaign.message.variants.length > 0) {
         // Initialize round-robin index for fallback
         if (!this.variantRoundRobinIndex.has(campaignId)) {
           this.variantRoundRobinIndex.set(campaignId, 0);
         }
-  
+
         const currentIndex = this.variantRoundRobinIndex.get(campaignId);
         const selectedVariant = campaign.message.variants[currentIndex];
-        
+
         const nextIndex = (currentIndex + 1) % campaign.message.variants.length;
         this.variantRoundRobinIndex.set(campaignId, nextIndex);
-  
+
         console.log("AI failed, using round-robin variant as fallback");
         return {
           content: selectedVariant.content,
@@ -857,7 +856,7 @@ async checkAndHandleTimeRestrictions(campaignId) {
           characterCount: selectedVariant.characterCount
         };
       }
-  
+
       // Final fallback: use base message
       console.log("Using base message as final fallback");
       return {
@@ -867,7 +866,7 @@ async checkAndHandleTimeRestrictions(campaignId) {
         characterCount: (campaign?.messageContent || campaign?.taskSettings?.aiPrompt || 'Default message').length
       };
     }
-  
+
     // Default fallback if no conditions matched
     console.log("No message variation type specified, using default");
     return {
@@ -918,10 +917,10 @@ async checkAndHandleTimeRestrictions(campaignId) {
       // FIXED: Enhanced time restriction check before starting
       if (campaign?.taskSettings?.timeRestrictions?.enabled) {
         const timeCheck = await this.checkAndHandleTimeRestrictions(campaignId);
-        
+
         if (!timeCheck.shouldProcess) {
           console.log(`Cannot start campaign ${campaignId} - ${timeCheck.reason}`);
-          
+
           // Only update if not already in the correct state
           if (campaign.status !== 'paused' || campaign.pauseReason !== timeCheck.reason) {
             await Campaign.findByIdAndUpdate(campaignId, {
@@ -930,17 +929,17 @@ async checkAndHandleTimeRestrictions(campaignId) {
               pausedAt: new Date(),
               updatedAt: new Date()
             });
-            
+
             await this.emitCampaignStatusChange(campaignId, campaign.status, 'paused', timeCheck.reason);
           }
-          
+
           throw new Error(`Cannot start campaign: ${timeCheck.reason}`);
         }
       }
 
       // Create queue + worker for this campaign
       const queue = await this.createCampaignProcessor(campaignId);
-      
+
       // Add one job that the worker will process
       await queue.add('process-campaign', {
         campaignId
@@ -1010,77 +1009,77 @@ async checkAndHandleTimeRestrictions(campaignId) {
 
   // FIXED: Enhanced resume campaign with time restriction check
   // FIXED: Enhanced resume campaign with better time restriction handling
-async resumeCampaign(campaignId) {
-  try {
-    const campaign = await Campaign.findById(campaignId);
-    if (!campaign) {
-      throw new Error('Campaign not found');
-    }
-
-    // If campaign was paused due to time restrictions, check if we're now within hours
-    if (campaign.pauseReason === 'outside_allowed_hours') {
-      const timeCheck = await this.checkAndHandleTimeRestrictions(campaignId);
-      
-      if (!timeCheck.shouldProcess) {
-        console.log(`Cannot resume campaign ${campaignId} - still outside allowed hours`);
-        // Keep it paused with the same reason
-        await Campaign.findByIdAndUpdate(campaignId, {
-          status: 'paused',
-          pauseReason: 'outside_allowed_hours',
-          updatedAt: new Date()
-        });
-        throw new Error('Cannot resume campaign outside allowed hours');
+  async resumeCampaign(campaignId) {
+    try {
+      const campaign = await Campaign.findById(campaignId);
+      if (!campaign) {
+        throw new Error('Campaign not found');
       }
-      
-      // If we're now within hours, clear the pause reason and continue
-      console.log(`Campaign ${campaignId} is now within allowed hours, proceeding with resume`);
-    }
 
-    // Unpause queue (if exists) and add job again to resume processing
-    const queueName = `campaign-${campaignId}`;
-    let queue = this.queues.get(queueName);
+      // If campaign was paused due to time restrictions, check if we're now within hours
+      if (campaign.pauseReason === 'outside_allowed_hours') {
+        const timeCheck = await this.checkAndHandleTimeRestrictions(campaignId);
 
-    if (!queue) {
-      // create queue + worker if not present
-      queue = await this.createCampaignProcessor(campaignId);
-    } else {
-      try {
-        await queue.resume();
-      } catch (err) {
-        console.error(`Error resuming queue ${queueName}:`, err);
+        if (!timeCheck.shouldProcess) {
+          console.log(`Cannot resume campaign ${campaignId} - still outside allowed hours`);
+          // Keep it paused with the same reason
+          await Campaign.findByIdAndUpdate(campaignId, {
+            status: 'paused',
+            pauseReason: 'outside_allowed_hours',
+            updatedAt: new Date()
+          });
+          throw new Error('Cannot resume campaign outside allowed hours');
+        }
+
+        // If we're now within hours, clear the pause reason and continue
+        console.log(`Campaign ${campaignId} is now within allowed hours, proceeding with resume`);
       }
+
+      // Unpause queue (if exists) and add job again to resume processing
+      const queueName = `campaign-${campaignId}`;
+      let queue = this.queues.get(queueName);
+
+      if (!queue) {
+        // create queue + worker if not present
+        queue = await this.createCampaignProcessor(campaignId);
+      } else {
+        try {
+          await queue.resume();
+        } catch (err) {
+          console.error(`Error resuming queue ${queueName}:`, err);
+        }
+      }
+
+      // Add a new process-campaign job to pick up where left off
+      await queue.add('process-campaign', { campaignId }, {
+        jobId: `process-campaign-resume-${campaignId}-${Date.now()}`
+      });
+
+      // Update campaign status - clear pause reason if it was for time restrictions
+      const updateData = {
+        status: 'active',
+        resumedAt: new Date(),
+        updatedAt: new Date()
+      };
+
+      // Only clear pause reason if it was for time restrictions
+      if (campaign.pauseReason === 'outside_allowed_hours') {
+        updateData.pauseReason = null;
+      }
+
+      await Campaign.findByIdAndUpdate(campaignId, updateData);
+
+      // Emit resume events via socket
+      await this.emitCampaignStatusChange(campaignId, 'paused', 'active', 'campaign_resumed');
+      await this.emitCampaignProgress(campaignId);
+
+      console.log(`Campaign ${campaignId} resumed successfully`);
+
+    } catch (error) {
+      console.error(`Error resuming campaign ${campaignId}:`, error);
+      throw error;
     }
-
-    // Add a new process-campaign job to pick up where left off
-    await queue.add('process-campaign', { campaignId }, {
-      jobId: `process-campaign-resume-${campaignId}-${Date.now()}`
-    });
-
-    // Update campaign status - clear pause reason if it was for time restrictions
-    const updateData = {
-      status: 'active',
-      resumedAt: new Date(),
-      updatedAt: new Date()
-    };
-    
-    // Only clear pause reason if it was for time restrictions
-    if (campaign.pauseReason === 'outside_allowed_hours') {
-      updateData.pauseReason = null;
-    }
-
-    await Campaign.findByIdAndUpdate(campaignId, updateData);
-
-    // Emit resume events via socket
-    await this.emitCampaignStatusChange(campaignId, 'paused', 'active', 'campaign_resumed');
-    await this.emitCampaignProgress(campaignId);
-
-    console.log(`Campaign ${campaignId} resumed successfully`);
-    
-  } catch (error) {
-    console.error(`Error resuming campaign ${campaignId}:`, error);
-    throw error;
   }
-}
 
   // Stop campaign (obliterate queue + close worker)
   async stopCampaign(campaignId) {
@@ -1115,7 +1114,7 @@ async resumeCampaign(campaignId) {
     this.variantRoundRobinIndex.delete(campaignId);
 
     console.log("campaign_stopped");
-    
+
     // Update campaign status
     await Campaign.findByIdAndUpdate(campaignId, {
       status: 'stopped',
@@ -1143,11 +1142,11 @@ async resumeCampaign(campaignId) {
         campaign: campaignId,
         status: { $in: ['sent', 'delivered'] }
       })
-      .select('content -_id')
-      .sort({ createdAt: -1 })
-      .limit(limit)
-      .lean();
-  
+        .select('content -_id')
+        .sort({ createdAt: -1 })
+        .limit(limit)
+        .lean();
+
       return previousMessages.map(msg => msg.content);
     } catch (error) {
       console.error(`Error fetching previous messages for campaign ${campaignId}:`, error);
@@ -1261,12 +1260,12 @@ async resumeCampaign(campaignId) {
         // Optionally re-add the job if not already in Redis
         const jobs = await queue.getJobs(['waiting', 'active', 'delayed']);
         const alreadyQueued = jobs.some(job => job.data.campaignId.toString() === campaign._id.toString());
-        
+
         if (!alreadyQueued && campaign.status === 'active') {
           console.log(`Re-adding process-campaign job for ${campaign._id}`);
           await queue.add('process-campaign', { campaignId: campaign._id }, {
             jobId: `process-campaign-${campaign._id}-${Date.now()}`
-          });  
+          });
         }
       }
 
@@ -1282,7 +1281,7 @@ async resumeCampaign(campaignId) {
       const contact = await Contact.findById(contactId)
         .populate('assignedSim.simId')
         .populate('assignedSim.deviceId');
-      
+
       if (!contact || !contact.assignedSim) {
         return null;
       }
@@ -1323,8 +1322,8 @@ async resumeCampaign(campaignId) {
       const contacts = await Contact.find({
         contactList: campaign.contactList._id
       })
-      .populate('assignedSim.simId')
-      .select('phoneNumber assignedSim');
+        .populate('assignedSim.simId')
+        .select('phoneNumber assignedSim');
 
       // Group by SIM
       const simUsage = {};
@@ -1381,9 +1380,9 @@ async resumeCampaign(campaignId) {
         status: { $in: ['active', 'paused'] },
         'taskSettings.timeRestrictions.enabled': true
       });
-      
+
       console.log(`Checking time restrictions for ${campaigns.length} campaigns`);
-      
+
       for (const campaign of campaigns) {
         try {
           await this.checkAndHandleTimeRestrictions(campaign._id);
@@ -1391,7 +1390,7 @@ async resumeCampaign(campaignId) {
           console.error(`Error checking time restrictions for campaign ${campaign._id}:`, error);
         }
       }
-      
+
       console.log('Completed time restriction checks for all campaigns');
     } catch (error) {
       console.error('Error checking all campaign time restrictions:', error);

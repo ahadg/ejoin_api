@@ -7,6 +7,28 @@ const ContactList = require("../models/ContactList");
 const { createAndEmitNotification } = require("./notificationController");
 const DeviceClient = require("../services/deviceClient");
 
+const STOP_KEYWORDS = new Set(['stop', 'arret', 'arrêt']);
+const START_KEYWORDS = new Set(['start']);
+
+function normalizeSmsCommand(text = '') {
+  return text
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]/g, '');
+}
+
+function isExactSmsCommand(text, commands) {
+  const normalized = normalizeSmsCommand(text);
+  return normalized.length > 0 && commands.has(normalized);
+}
+
+function isShortCodeNumber(phoneNumber = '') {
+  const digits = phoneNumber.replace(/\D/g, '');
+  return digits.length > 0 && digits.length <= 6;
+}
+
 
 
 // ================== Get SMS ==================
@@ -779,21 +801,8 @@ exports.webhookSMS = async (req, res) => {
       // 🔸 Handle Regular, STOP, or START Messages
       // ==========================================================
 
-      const lowerMsg = (decodedSMS || '').trim().toLowerCase();
-
-      const stopKeywords = ['stop', 
-        //'unsubscribe', 'cancel',
-        //'quit', 'end', 
-        // 'unsub'
-        ];
-      const startKeywords = ['start', 
-        //'subscribe', 
-        //'yes', 'unstop', 
-        //'resubscribe'
-      ];
-      
-      const isStopMessage = stopKeywords.some(word => lowerMsg.includes(word));
-      const isStartMessage = startKeywords.some(word => lowerMsg.includes(word));
+      const isStopMessage = isExactSmsCommand(decodedSMS, STOP_KEYWORDS);
+      const isStartMessage = isExactSmsCommand(decodedSMS, START_KEYWORDS);
       
       console.log(`📨 Processing ${isStopMessage ? 'STOP' : isStartMessage ? 'START' : 'regular'} message from ${from}`);
 
@@ -927,8 +936,12 @@ exports.webhookSMS = async (req, res) => {
 // Helper function to send unsubscribe confirmation
 async function sendUnsubscribeConfirmation(device, port, toPhoneNumber, originalMessage) {
   try {
+    if (isShortCodeNumber(toPhoneNumber)) {
+      console.log(`⏭️ Skipping unsubscribe confirmation to short code ${toPhoneNumber}`);
+      return { skipped: true, reason: 'short_code_destination' };
+    }
+
     const client = new DeviceClient(device);
-    console.log("sendUnsubscribeConfirmation",)
     const unsubscribeMessage = "You have successfully been unsubscribed. You will not receive any more messages from this number. Reply START to resubscribe.";
     // ✅ Normalize phone number
     const original = toPhoneNumber.replace(/\D/g, ""); // keep only digits
@@ -988,7 +1001,11 @@ async function sendUnsubscribeConfirmation(device, port, toPhoneNumber, original
 // Helper function to send resubscribe confirmation
 async function sendResubscribeConfirmation(device, port, toPhoneNumber, originalMessage) {
   try {
-    console.log({})
+    if (isShortCodeNumber(toPhoneNumber)) {
+      console.log(`⏭️ Skipping resubscribe confirmation to short code ${toPhoneNumber}`);
+      return { skipped: true, reason: 'short_code_destination' };
+    }
+
     const client = new DeviceClient(device);
     
     const resubscribeMessage = "You have successfully resubscribed. You will now receive messages from this number. Reply STOP to unsubscribe at any time.";
@@ -1070,5 +1087,4 @@ exports.webhookHealth = async (req, res) => {
     res.status(500).json({ status: 'unhealthy', error: error.message });
   }
 };
-
 
