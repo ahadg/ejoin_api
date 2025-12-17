@@ -113,7 +113,6 @@ src/
 │   ├── campaign.service  # Campaign business logic
 │   ├── device.service    # EJOIN device communication
 │   └── queue.service     # BullMQ integration
-├── sockets/              # Socket.IO event handlers
 ├── models/               # Mongoose schemas
 ├── workers/              # BullMQ workers
 └── utils/                # Helpers & shared utilities
@@ -143,14 +142,6 @@ POST /api/campaigns/:id/pause – Pause / resume
 
 GET /api/queues – Queue metrics and monitoring
 
-System & Monitoring
-
-GET /health – System health check
-
-GET /health/redis – Redis connection status
-
-GET /api/dashboard – System statistics & overview
-
 🚀 Getting Started
 Prerequisites
 
@@ -174,10 +165,10 @@ npm install
 cp .env.example .env
 
 Environment Variables
-MONGODB_URI=mongodb://localhost:27017/ejoin_sms
-REDIS_URL=redis://localhost:6379
-JWT_SECRET=your_jwt_secret_key
-PORT=3000
+MONGODB_URI=
+REDIS_URL=
+JWT_SECRET=
+PORT=
 
 Run Server
 # Development
