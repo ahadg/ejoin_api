@@ -8,6 +8,7 @@ const socketIo = require('socket.io');
 require('dotenv').config();
 const jwt = require('jsonwebtoken');
 const authRoutes = require('./routes/auth');
+const userRoutes = require('./routes/users');
 const statusRoutes = require('./routes/Ejoin/status');
 const ejoinSmsRoutes = require('./routes/Ejoin/Sms');
 const campaignRoutes = require('./routes/compaign');
@@ -42,25 +43,25 @@ const initializeRedis = async () => {
   try {
     console.log('🔄 Initializing Redis connection...');
     const redisConnection = redis.init();
-    
+
     // Test Redis connection
     await redisConnection.ping();
     console.log('✅ Redis connected successfully');
-    
+
     return redisConnection;
   } catch (error) {
     console.error('❌ Redis connection failed:', error);
     throw error;
   }
 };
-console.log("process.env.MONGODB_URI",process.env.MONGODB_URI)
+console.log("process.env.MONGODB_URI", process.env.MONGODB_URI)
 // Connect to MongoDB
 mongoose.connect(`${process.env.MONGODB_URI}`, {
   useNewUrlParser: true,
   useUnifiedTopology: true,
 })
-.then(() => console.log('✅ Connected to MongoDB'))
-.catch(err => console.error('❌ MongoDB connection error:', err));
+  .then(() => console.log('✅ Connected to MongoDB'))
+  .catch(err => console.error('❌ MongoDB connection error:', err));
 
 // Socket.IO authentication middleware
 io.use((socket, next) => {
@@ -84,10 +85,10 @@ io.use((socket, next) => {
 io.on('connection', (socket) => {
   // Extract user ID from auth token
   //socket.userId = socket.decoded_token?.id || socket.handshake.auth.userId;
-  
+
   // Get current section from query params
   socket.currentSection = socket.handshake.query.section || 'unknown';
-  
+
   console.log(`👤 User ${socket.userId} connected from section: ${socket.currentSection}`);
 
   // Join user to their personal room
@@ -128,8 +129,8 @@ app.set('redis', redis);
 // CORS middleware
 app.use(cors({
   origin: '*',
-  methods: ['GET','POST','PUT','PATCH','DELETE','OPTIONS'],
-  allowedHeaders: ['Content-Type','Authorization'],
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
   exposedHeaders: ['Authorization'],
   credentials: true,
 }));
@@ -145,12 +146,12 @@ app.use(bodyParser.urlencoded({ extended: true }));
 app.get('/health', async (req, res) => {
   try {
     const dbStatus = mongoose.connection.readyState === 1 ? 'Connected' : 'Disconnected';
-    
+
     // Check Redis health
     const redisHealth = await redis.healthCheck();
-    
-    res.json({ 
-      status: 'OK', 
+
+    res.json({
+      status: 'OK',
       timestamp: new Date().toISOString(),
       database: dbStatus,
       redis: redisHealth.status,
@@ -208,6 +209,7 @@ app.get('/api/queues', async (req, res) => {
 
 // Authentication routes
 app.use('/api/auth', authRoutes);
+app.use('/api/users', userRoutes);
 
 // EJOIN routes
 app.use('/api/ejoin/goip_get_status', auth, statusRoutes);
@@ -245,28 +247,28 @@ app.use((error, req, res, next) => {
 // Graceful shutdown
 const gracefulShutdown = async () => {
   console.log('🛑 Received shutdown signal, closing servers...');
-  
+
   try {
     // Close Redis connection
     await redis.close();
     console.log('✅ Redis connection closed');
-    
+
     // Close MongoDB connection
     await mongoose.connection.close();
     console.log('✅ MongoDB connection closed');
-    
+
     // Close HTTP server
     server.close(() => {
       console.log('✅ HTTP server closed');
       process.exit(0);
     });
-    
+
     // Force close after 10 seconds
     setTimeout(() => {
       console.error('❌ Could not close connections in time, forcefully shutting down');
       process.exit(1);
     }, 10000);
-    
+
   } catch (error) {
     console.error('❌ Error during shutdown:', error);
     process.exit(1);
@@ -286,7 +288,7 @@ const startServer = async () => {
   try {
     // Initialize Redis first
     await initializeRedis();
-    
+
     // Start the server
     server.listen(port, () => {
       console.log(`🚀 SMS Platform API server running on port ${port}`);

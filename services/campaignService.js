@@ -4,6 +4,7 @@ const ContactList = require('../models/ContactList');
 const Contact = require('../models/Contact');
 const Device = require('../models/Device');
 const Sim = require('../models/Sim');
+const User = require('../models/User');
 const redis = require('../config/redis');
 const DeviceClient = require('./deviceClient');
 const aiGenerationController = require('../controllers/aiGenerationController');
@@ -69,14 +70,38 @@ class CampaignService {
   // Get available SIMs for a device in circular order
   async getAvailableSims(deviceId, campaignId) {
     try {
-      // Get all active SIMs for the device
-      console.log("deviceId", deviceId)
-      const sims = await Sim.find({
-        device: deviceId,
-        inserted: true,
-        slotActive: true,
-        status: 'active'
-      }).sort({ port: 1, slot: 1 });
+      console.log("deviceId", deviceId, "campaignId", campaignId);
+
+      // Get campaign and populate user to check role
+      const campaign = await Campaign.findById(campaignId).populate('user');
+      if (!campaign) {
+        throw new Error(`Campaign ${campaignId} not found`);
+      }
+
+      let sims = [];
+
+      // If user role is 'user', get SIMs from assignedSims
+      if (campaign.user.role === 'user' && campaign.user.assignedSims && campaign.user.assignedSims.length > 0) {
+        console.log(`User is regular user, fetching from assignedSims: ${campaign.user.assignedSims}`);
+
+        // Fetch SIMs by IDs from assignedSims array
+        sims = await Sim.find({
+          _id: { $in: campaign.user.assignedSims },
+          device: deviceId,
+          inserted: true,
+          slotActive: true,
+          status: 'active'
+        }).sort({ port: 1, slot: 1 });
+      } else {
+        // Admin user - get all active SIMs for the device
+        console.log(`User is admin, fetching all active SIMs for device`);
+        sims = await Sim.find({
+          device: deviceId,
+          inserted: true,
+          slotActive: true,
+          status: 'active'
+        }).sort({ port: 1, slot: 1 });
+      }
 
       if (sims.length === 0) {
         throw new Error(`No active SIMs found for device ${deviceId}`);

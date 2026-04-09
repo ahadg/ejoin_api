@@ -4,20 +4,41 @@ const CampaignStats = require('../models/campaignStats');
 const ContactList = require('../models/ContactList');
 const Sim = require('../models/Sim');
 const SimMessages = require('../models/SimMessages');
+const User = require('../models/User');
 
 // Get comprehensive dashboard statistics
 exports.getDashboardStats = async (req, res) => {
   try {
     const userId = req.user._id;
+    const userRole = req.user.role;
     const today = new Date();
-    console.log("today",today)
+    console.log("today", today)
     today.setHours(0, 0, 0, 0);
-    console.log("today",today)
+    console.log("today", today)
 
     const tomorrow = new Date(today);
     tomorrow.setDate(tomorrow.getDate() + 1);
     const yesterday = new Date(today);
     yesterday.setDate(yesterday.getDate() - 1);
+
+    // Determine which user ID to use for fetching devices
+    let deviceOwnerId = userId;
+    if (userRole === 'user' && req.user.createdBy) {
+      deviceOwnerId = req.user.createdBy;
+      console.log(`User is regular user, fetching devices from admin: ${deviceOwnerId}`);
+    }
+
+    // Get device IDs for this user
+    const userDevices = await Device.find({ user: deviceOwnerId }).select('_id');
+    const deviceIds = userDevices.map(d => d._id);
+
+    // Determine SIM filter based on user role
+    let simFilter = { device: { $in: deviceIds } };
+    if (userRole === 'user' && req.user.assignedSims && req.user.assignedSims.length > 0) {
+      // Regular user - only get assigned SIMs
+      simFilter._id = { $in: req.user.assignedSims };
+      console.log(`User is regular user, filtering by assignedSims: ${req.user.assignedSims}`);
+    }
 
     // Get all data in parallel for better performance
     const [
@@ -29,40 +50,39 @@ exports.getDashboardStats = async (req, res) => {
       sims,
       recentMessages
     ] = await Promise.all([
-      Device.find({ user: userId }),
+      Device.find({ user: deviceOwnerId }),
       Campaign.find({ user: userId }),
       CampaignStats.find({ user: userId, date: { $gte: today, $lt: tomorrow } }),
       CampaignStats.find({ user: userId, date: { $gte: yesterday, $lt: today } }),
       ContactList.find({ user: userId }),
-      Sim.find({ device: { $in: await Device.find({ user: userId }).select('_id') } })
-        .populate('device', 'name status'),
-      SimMessages.find({ 
-        sim: { $in: await Sim.find({ device: { $in: await Device.find({ user: userId }).select('_id') } }).select('_id') }
+      Sim.find(simFilter).populate('device', 'name status'),
+      SimMessages.find({
+        sim: { $in: await Sim.find(simFilter).select('_id') }
       })
         .sort({ createdAt: -1 })
         .limit(10)
         .populate('sim', 'phoneNumber operator')
     ]);
-    
+
     console.log({ todayStats, yesterdayStats });
 
     // Device Statistics
     const totalDevices = devices.length;
     const activeDevices = devices.filter(d => d.status === 'online').length;
-    
+
     // SIM Statistics - Updated to include daily limits
     const totalSIMs = devices?.[0]?.totalSlots;
     const activeSIMs = devices?.[0]?.activeSlots;
     const simsWithSignal = sims.filter(sim => sim.signalStrength && sim.signalStrength > 0);
-    const averageSignal = simsWithSignal.length > 0 
-      ? simsWithSignal.reduce((sum, sim) => sum + sim.signalStrength, 0) / simsWithSignal.length 
+    const averageSignal = simsWithSignal.length > 0
+      ? simsWithSignal.reduce((sum, sim) => sum + sim.signalStrength, 0) / simsWithSignal.length
       : 0;
 
     // Calculate SIM daily usage statistics
-    const activeSimsWithLimits = sims.filter(sim => 
+    const activeSimsWithLimits = sims.filter(sim =>
       sim.inserted && sim.slotActive && sim.status === 'active'
     );
-    
+
     const totalSimDailyLimit = activeSimsWithLimits.reduce((sum, sim) => sum + (sim.dailyLimit || 100), 0);
     const totalSimDailySent = activeSimsWithLimits.reduce((sum, sim) => sum + (sim.dailySent || 0), 0);
     const simUsagePercentage = totalSimDailyLimit > 0 ? (totalSimDailySent / totalSimDailyLimit) * 100 : 0;
@@ -76,9 +96,9 @@ exports.getDashboardStats = async (req, res) => {
     const totalSentToday = todayStats.reduce((sum, stat) => sum + (stat.sentMessages || 0), 0);
     const totalDeliveredToday = todayStats.reduce((sum, stat) => sum + (stat.deliveredMessages || 0), 0);
     const totalFailedToday = todayStats.reduce((sum, stat) => sum + (stat.failedMessages || 0), 0);
-    
+
     const totalSentYesterday = yesterdayStats.reduce((sum, stat) => sum + (stat.sentMessages || 0), 0);
-    const messageTrend = totalSentYesterday > 0 
+    const messageTrend = totalSentYesterday > 0
       ? ((totalSentToday - totalSentYesterday) / totalSentYesterday * 100).toFixed(1)
       : 0;
 
@@ -86,20 +106,20 @@ exports.getDashboardStats = async (req, res) => {
     const totalSentAllTime = campaigns.reduce((sum, campaign) => sum + (campaign.sentMessages || 0), 0);
     const totalDeliveredAllTime = campaigns.reduce((sum, campaign) => sum + (campaign.deliveredMessages || 0), 0);
     const totalFailedAllTime = campaigns.reduce((sum, campaign) => sum + (campaign.failedMessages || 0), 0);
-    
-    const successRate = totalSentAllTime > 0 
+
+    const successRate = totalSentAllTime > 0
       ? ((totalDeliveredAllTime / totalSentAllTime) * 100).toFixed(1)
       : 0;
 
     // Processing Time Statistics
     const totalProcessingTimeToday = todayStats.reduce((sum, stat) => sum + (stat.averageProcessingTime || 0), 0);
-    const avgProcessingTimeToday = todayStats.length > 0 
-      ? totalProcessingTimeToday / todayStats.length 
+    const avgProcessingTimeToday = todayStats.length > 0
+      ? totalProcessingTimeToday / todayStats.length
       : 0;
-    
+
     const totalProcessingTimeAllTime = campaigns.reduce((sum, campaign) => sum + (campaign.averageProcessingTime || 0), 0);
-    const avgProcessingTimeAllTime = campaigns.length > 0 
-      ? totalProcessingTimeAllTime / campaigns.length 
+    const avgProcessingTimeAllTime = campaigns.length > 0
+      ? totalProcessingTimeAllTime / campaigns.length
       : 0;
 
     // Recent Activity
@@ -124,7 +144,7 @@ exports.getDashboardStats = async (req, res) => {
         activeSIMs: `${activeSIMs || 0}/${totalSIMs || 0}`,
         messagesSentToday: totalSentToday,
         successRate: `${successRate}%`,
-        
+
         // SIM Daily Usage Stats
         simDailyUsage: {
           totalSent: totalSimDailySent,
@@ -132,12 +152,12 @@ exports.getDashboardStats = async (req, res) => {
           usagePercentage: Math.round(simUsagePercentage),
           activeSimsCount: activeSimsWithLimits.length
         },
-        
+
         // Additional Stats
         totalCampaigns,
         activeCampaigns,
         totalContacts,
-        
+
         // Performance Metrics
         performance: {
           deliveryRate: `${deliveryRate}%`,
@@ -145,14 +165,14 @@ exports.getDashboardStats = async (req, res) => {
           averageSignal: Math.round(averageSignal),
           messageTrend: parseFloat(messageTrend),
         },
-        
+
         // Device Health
         deviceHealth: {
           online: activeDevices,
           offline: totalDevices - activeDevices,
           warning: devices.filter(d => d.status === 'warning').length
         },
-        
+
         // SIM Health
         simHealth: {
           active: activeSIMs,
@@ -170,11 +190,11 @@ exports.getDashboardStats = async (req, res) => {
             return usage >= 100;
           }).length
         },
-        
+
         // Campaign Progress
         campaignProgress: campaigns.map(campaign => ({
           name: campaign.name,
-          progress: campaign.totalContacts > 0 
+          progress: campaign.totalContacts > 0
             ? Math.min(100, (campaign.sentMessages / campaign.totalContacts) * 100)
             : 0,
           status: campaign.status,
@@ -182,16 +202,16 @@ exports.getDashboardStats = async (req, res) => {
           total: campaign.totalContacts,
           averageProcessingTime: parseFloat((campaign.averageProcessingTime || 0).toFixed(2))
         })),
-        
+
         // Recent Activity
         recentActivity,
-        
+
         // Processing Time Insights
         processingInsights: {
-          fastestCampaign: campaigns.length > 0 
+          fastestCampaign: campaigns.length > 0
             ? Math.min(...campaigns.map(c => c.averageProcessingTime || 0)).toFixed(2)
             : 0,
-          slowestCampaign: campaigns.length > 0 
+          slowestCampaign: campaigns.length > 0
             ? Math.max(...campaigns.map(c => c.averageProcessingTime || 0)).toFixed(2)
             : 0,
           todayVsAllTime: parseFloat((avgProcessingTimeToday - avgProcessingTimeAllTime).toFixed(2))
@@ -207,25 +227,39 @@ exports.getDashboardStats = async (req, res) => {
 // Get real-time device status with detailed SIM information
 exports.getDashboardDevices = async (req, res) => {
   try {
-    const devices = await Device.find({ user: req.user._id })
+    // Determine which user ID to use for fetching devices
+    let deviceOwnerId = req.user._id;
+    if (req.user.role === 'user' && req.user.createdBy) {
+      deviceOwnerId = req.user.createdBy;
+      console.log(`User is regular user, fetching devices from admin: ${deviceOwnerId}`);
+    }
+
+    const devices = await Device.find({ user: deviceOwnerId })
       .select('name status ipAddress location totalSlots activeSlots lastSeen temperature uptime dailySent dailyLimit firmwareVersion')
       .sort({ status: -1, createdAt: -1 });
 
     // Get detailed SIM data for each device
     const devicesWithSims = await Promise.all(
       devices.map(async (device) => {
-        const sims = await Sim.find({ device: device._id })
+        let currentSimFilter = { device: device._id };
+
+        // If user is not admin and has assigned SIMs, filter by those
+        if (req.user.role !== 'admin' && req.user.assignedSims && req.user.assignedSims.length > 0) {
+          currentSimFilter._id = { $in: req.user.assignedSims };
+        }
+
+        const sims = await Sim.find(currentSimFilter)
           .select('portNumber phoneNumber status operator signalStrength networkType balance dailySent dailyLimit inserted slotActive lastUpdated')
           .sort({ port: 1, slot: 1 });
-        
+
         const activeSims = sims.filter(sim => sim.inserted && sim.slotActive && sim.status === 'active');
         const simsWithGoodSignal = activeSims.filter(sim => sim.signalStrength > 20);
-        
+
         // Calculate SIM daily usage for this device
         const simDailySent = activeSims.reduce((sum, sim) => sum + (sim.dailySent || 0), 0);
         const simDailyLimit = activeSims.reduce((sum, sim) => sum + (sim.dailyLimit || 100), 0);
         const simUsagePercentage = simDailyLimit > 0 ? (simDailySent / simDailyLimit) * 100 : 0;
-        
+
         return {
           _id: device._id,
           name: device.name,
@@ -289,7 +323,7 @@ exports.getDashboardDevices = async (req, res) => {
             totalSent: devicesWithSims.reduce((sum, device) => sum + device.simDailyUsage.sent, 0),
             totalLimit: devicesWithSims.reduce((sum, device) => sum + device.simDailyUsage.limit, 0),
             overallUsage: devicesWithSims.reduce((sum, device) => {
-              const deviceUsage = device.simDailyUsage.limit > 0 ? 
+              const deviceUsage = device.simDailyUsage.limit > 0 ?
                 (device.simDailyUsage.sent / device.simDailyUsage.limit) * 100 : 0;
               return sum + deviceUsage;
             }, 0) / devicesWithSims.length
@@ -307,27 +341,44 @@ exports.getDashboardDevices = async (req, res) => {
 exports.getActiveSIMs = async (req, res) => {
   try {
     const userId = req.user._id;
-    
+    const userRole = req.user.role;
+
+    // Determine which user ID to use for fetching devices
+    let deviceOwnerId = userId;
+    if (userRole === 'user' && req.user.createdBy) {
+      deviceOwnerId = req.user.createdBy;
+      console.log(`User is regular user, fetching devices from admin: ${deviceOwnerId}`);
+    }
+
     // Get user's devices first
-    const userDevices = await Device.find({ user: userId }).select('_id');
+    const userDevices = await Device.find({ user: deviceOwnerId }).select('_id');
     const deviceIds = userDevices.map(device => device._id);
-    
-    // Get active SIMs with daily usage
-    const activeSims = await Sim.find({
+
+    // Build SIM filter based on user role
+    let simFilter = {
       device: { $in: deviceIds },
       inserted: true,
       slotActive: true,
       status: 'active'
-    })
-    .populate('device', 'name status')
-    .select('portNumber phoneNumber status operator signalStrength networkType balance dailySent dailyLimit inserted slotActive lastUpdated')
-    .sort({ 'device.name': 1, port: 1, slot: 1 });
+    };
+
+    // If user is regular user with assigned SIMs, filter by those
+    if (userRole === 'user' && req.user.assignedSims && req.user.assignedSims.length > 0) {
+      simFilter._id = { $in: req.user.assignedSims };
+      console.log(`User is regular user, filtering by assignedSims: ${req.user.assignedSims}`);
+    }
+
+    // Get active SIMs with daily usage
+    const activeSims = await Sim.find(simFilter)
+      .populate('device', 'name status')
+      .select('portNumber phoneNumber status operator signalStrength networkType balance dailySent dailyLimit inserted slotActive lastUpdated')
+      .sort({ 'device.name': 1, port: 1, slot: 1 });
 
     // Format SIM data with usage percentages
     const formattedSims = activeSims.map(sim => {
-      const usagePercentage = sim.dailyLimit > 0 ? 
+      const usagePercentage = sim.dailyLimit > 0 ?
         Math.round(((sim.dailySent || 0) / sim.dailyLimit) * 100) : 0;
-      
+
       let usageStatus = 'normal';
       if (usagePercentage >= 100) {
         usageStatus = 'exceeded';
@@ -381,72 +432,72 @@ exports.getActiveSIMs = async (req, res) => {
 };
 
 exports.getRecentCampaigns = async (req, res) => {
-    try {
-      const { limit = 5 } = req.query;
-      
-      const campaigns = await Campaign.find({ user: req.user._id })
-        .populate('contactList', 'name totalContacts')
-        .populate('device', 'name')
-        .sort({ updatedAt: -1, createdAt: -1 })
-        .limit(parseInt(limit));
-      
-      // Format campaigns for dashboard display
-      const formattedCampaigns = campaigns.map(campaign => {
-        const progress = campaign.totalContacts > 0 
-          ? ((campaign.sentMessages / campaign.totalContacts) * 100) 
-          : 0;
-        
-        // Calculate ETA (simplified calculation)
-        let eta = 'N/A';
-        if (campaign.status === 'active' && progress > 0 && progress < 100) {
-          const timeElapsed = new Date() - campaign.updatedAt;
-          const messagesPerHour = (campaign.sentMessages / Math.max(timeElapsed / (1000 * 60 * 60), 0.1)) || 1;
-          const remainingMessages = campaign.totalContacts - campaign.sentMessages;
-          const hoursRemaining = remainingMessages / messagesPerHour;
-          
-          if (hoursRemaining < 1) {
-            eta = `${Math.ceil(hoursRemaining * 60)}m`;
-          } else {
-            eta = `${Math.ceil(hoursRemaining)}h`;
-          }
-        } else if (campaign.status === 'paused') {
-          eta = 'Paused';
-        } else if (campaign.status === 'completed') {
-          eta = 'Completed';
+  try {
+    const { limit = 5 } = req.query;
+
+    const campaigns = await Campaign.find({ user: req.user._id })
+      .populate('contactList', 'name totalContacts')
+      .populate('device', 'name')
+      .sort({ updatedAt: -1, createdAt: -1 })
+      .limit(parseInt(limit));
+
+    // Format campaigns for dashboard display
+    const formattedCampaigns = campaigns.map(campaign => {
+      const progress = campaign.totalContacts > 0
+        ? ((campaign.sentMessages / campaign.totalContacts) * 100)
+        : 0;
+
+      // Calculate ETA (simplified calculation)
+      let eta = 'N/A';
+      if (campaign.status === 'active' && progress > 0 && progress < 100) {
+        const timeElapsed = new Date() - campaign.updatedAt;
+        const messagesPerHour = (campaign.sentMessages / Math.max(timeElapsed / (1000 * 60 * 60), 0.1)) || 1;
+        const remainingMessages = campaign.totalContacts - campaign.sentMessages;
+        const hoursRemaining = remainingMessages / messagesPerHour;
+
+        if (hoursRemaining < 1) {
+          eta = `${Math.ceil(hoursRemaining * 60)}m`;
+        } else {
+          eta = `${Math.ceil(hoursRemaining)}h`;
         }
-        
-        return {
-          _id: campaign._id,
-          name: campaign.name,
-          status: campaign.status,
-          progress: Math.min(progress, 100),
-          sentMessages: campaign.sentMessages || 0,
-          totalContacts: campaign.totalContacts || 0,
-          eta
-        };
-      });
-      
-      res.json({
-        code: 200,
-        data: {
-          campaigns: formattedCampaigns
-        }
-      });
-    } catch (error) {
-      console.error('Get recent campaigns error:', error);
-      res.status(500).json({ code: 500, reason: 'Error fetching recent campaigns' });
-    }
-  };
+      } else if (campaign.status === 'paused') {
+        eta = 'Paused';
+      } else if (campaign.status === 'completed') {
+        eta = 'Completed';
+      }
+
+      return {
+        _id: campaign._id,
+        name: campaign.name,
+        status: campaign.status,
+        progress: Math.min(progress, 100),
+        sentMessages: campaign.sentMessages || 0,
+        totalContacts: campaign.totalContacts || 0,
+        eta
+      };
+    });
+
+    res.json({
+      code: 200,
+      data: {
+        campaigns: formattedCampaigns
+      }
+    });
+  } catch (error) {
+    console.error('Get recent campaigns error:', error);
+    res.status(500).json({ code: 500, reason: 'Error fetching recent campaigns' });
+  }
+};
 
 // Get campaign performance analytics
 exports.getCampaignAnalytics = async (req, res) => {
   try {
     const { days = 7 } = req.query;
     const userId = req.user._id;
-    
+
     const startDate = new Date();
     startDate.setDate(startDate.getDate() - parseInt(days));
-    
+
     const campaignStats = await CampaignStats.find({
       user: userId,
       date: { $gte: startDate }

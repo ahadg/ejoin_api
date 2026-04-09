@@ -41,12 +41,12 @@ exports.getCampaigns = async (req, res) => {
 // Get campaign by ID
 exports.getCampaignById = async (req, res) => {
   try {
-    const campaign = await Campaign.findOne({ 
-      _id: req.params.id, 
-      user: req.user._id 
+    const campaign = await Campaign.findOne({
+      _id: req.params.id,
+      user: req.user._id
     })
-    .populate('contactList')
-    .populate('device');
+      .populate('contactList')
+      .populate('device');
 
     if (!campaign) {
       return res.status(404).json({ code: 404, reason: 'Campaign not found' });
@@ -64,7 +64,8 @@ exports.createCampaign = async (req, res) => {
   try {
     const {
       name, contactList, device, messageContent,
-      scheduledDate, priority, taskSettings, totalContacts, status, message
+      scheduledDate, priority, taskSettings, totalContacts, status, message,
+      startAfterPrevious // Add the new field
     } = req.body;
 
     // Verify contact list belongs to user
@@ -81,6 +82,26 @@ exports.createCampaign = async (req, res) => {
       }
     }
 
+    let previousCampaign = null;
+    let waitingForPrevious = false;
+
+    // If startAfterPrevious is enabled, find the last campaign for this device
+    if (startAfterPrevious && device) {
+      const lastCampaign = await Campaign.findOne({
+        user: req.user._id,
+        device: device,
+        status: { $in: ['scheduled', 'active', 'paused'] }
+      }).sort({ createdAt: -1 });
+
+      if (lastCampaign) {
+        previousCampaign = lastCampaign._id;
+        waitingForPrevious = true;
+
+        // Set status to pending instead of scheduled
+        status = 'pending';
+      }
+    }
+
     const campaign = new Campaign({
       name,
       contactList,
@@ -92,12 +113,16 @@ exports.createCampaign = async (req, res) => {
       taskSettings,
       user: req.user._id,
       totalContacts,
-      status
+      status,
+      startAfterPrevious,
+      previousCampaign,
+      waitingForPrevious
     });
 
     await campaign.save();
     await campaign.populate('contactList', 'name totalContacts');
     await campaign.populate('device', 'name status');
+    await campaign.populate('previousCampaign', 'name status');
 
     res.status(201).json({
       code: 201,
@@ -132,7 +157,7 @@ exports.updateCampaign = async (req, res) => {
     const campaign = await Campaign.findOneAndUpdate(
       { _id: req.params.id, user: req.user._id },
       {
-        totalContacts : contactListData?.optedInCount,
+        totalContacts: contactListData?.optedInCount,
         name, contactList, device, status, taskId,
         messageContent, scheduledDate, priority, taskSettings,
         updatedAt: new Date(),
@@ -225,6 +250,11 @@ exports.updateCampaignStatus = async (req, res) => {
       return res.status(404).json({ code: 404, reason: 'Campaign not found' });
     }
 
+    // If campaign is completed, check for pending campaigns
+    if (status === 'completed') {
+      await exports.checkPendingCampaigns(campaign.device, campaign._id);
+    }
+
     res.json({
       code: 200,
       message: `Campaign ${status} successfully`,
@@ -288,12 +318,63 @@ exports.resumeCampaign = async (req, res) => {
   }
 };
 
+exports.checkPendingCampaigns = async (deviceId, completedCampaignId = null) => {
+  try {
+    // Find campaigns that are waiting for the completed campaign or any previous campaign to finish
+    const query = {
+      status: 'pending',
+      waitingForPrevious: true
+    };
+
+    if (completedCampaignId) {
+      query.previousCampaign = completedCampaignId;
+    } else if (deviceId) {
+      query.device = deviceId;
+    }
+
+    const pendingCampaigns = await Campaign.find(query)
+      .populate('previousCampaign')
+      .sort({ createdAt: 1 }); // Oldest first
+
+    for (const campaign of pendingCampaigns) {
+      // Check if the previous campaign is completed
+      if (campaign.previousCampaign && campaign.previousCampaign.status === 'completed') {
+        // Update this campaign to scheduled status and remove waiting flag
+        campaign.status = 'scheduled';
+        campaign.waitingForPrevious = false;
+        campaign.previousCampaign = undefined; // Clear the reference since it's done
+        await campaign.save();
+
+        console.log(`Campaign ${campaign.name} is now scheduled as previous campaign completed`);
+
+        // Start the campaign if it should start immediately after previous
+        if (campaign.startAfterPrevious) {
+          await CampaignService.startCampaignProcessing(campaign._id);
+        }
+      }
+    }
+
+    return pendingCampaigns;
+  } catch (error) {
+    console.error('Error checking pending campaigns:', error);
+    throw error;
+  }
+};
+
 // Stop campaign
 exports.stopCampaign = async (req, res) => {
   try {
     const { id } = req.params;
 
+    const campaign = await Campaign.findById(id);
+    if (!campaign) {
+      return res.status(404).json({ code: 404, reason: 'Campaign not found' });
+    }
+
     await CampaignService.stopCampaign(id);
+
+    // Check for pending campaigns that were waiting for this one
+    await exports.checkPendingCampaigns(campaign.device, id);
 
     res.json({
       code: 200,
@@ -331,7 +412,7 @@ exports.smsStatusWebhook = async (req, res) => {
       const deliveryPromises = sdr.map(async (delivery) => {
         try {
           const { number, ts, code } = delivery;
-          
+
           // Find the message by phone number and taskId
           const messageDetail = await MessageSentDetails.findOne({
             taskId: tid.toString(),
@@ -363,7 +444,7 @@ exports.smsStatusWebhook = async (req, res) => {
       const failurePromises = fdr.map(async (failure) => {
         try {
           const { number, ts, code, gsm_cause } = failure;
-          
+
           // Find the message by phone number and taskId
           const messageDetail = await MessageSentDetails.findOne({
             taskId: tid.toString(),
@@ -418,7 +499,7 @@ exports.smsStatusWebhook = async (req, res) => {
       // };
 
       // Execute all updates
-      const [deliveryResults, failureResults, 
+      const [deliveryResults, failureResults,
         //sentResults
 
       ] = await Promise.all([
