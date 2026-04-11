@@ -6,6 +6,14 @@ const Sim = require('../models/Sim');
 const SimMessages = require('../models/SimMessages');
 const User = require('../models/User');
 
+function getAccessibleSimIds(user) {
+  if (user?.role === 'admin') {
+    return null;
+  }
+
+  return Array.isArray(user?.assignedSims) ? user.assignedSims : [];
+}
+
 // Get comprehensive dashboard statistics
 exports.getDashboardStats = async (req, res) => {
   try {
@@ -32,13 +40,16 @@ exports.getDashboardStats = async (req, res) => {
     const userDevices = await Device.find({ user: deviceOwnerId }).select('_id');
     const deviceIds = userDevices.map(d => d._id);
 
+    const accessibleSimIds = getAccessibleSimIds(req.user);
+
     // Determine SIM filter based on user role
     let simFilter = { device: { $in: deviceIds } };
-    if (userRole === 'user' && req.user.assignedSims && req.user.assignedSims.length > 0) {
-      // Regular user - only get assigned SIMs
-      simFilter._id = { $in: req.user.assignedSims };
-      console.log(`User is regular user, filtering by assignedSims: ${req.user.assignedSims}`);
+    if (accessibleSimIds !== null) {
+      simFilter._id = { $in: accessibleSimIds };
+      console.log(`User is regular user, filtering by assignedSims: ${accessibleSimIds}`);
     }
+
+    const scopedSimIdsPromise = Sim.find(simFilter).select('_id');
 
     // Get all data in parallel for better performance
     const [
@@ -48,7 +59,7 @@ exports.getDashboardStats = async (req, res) => {
       yesterdayStats,
       contactLists,
       sims,
-      recentMessages
+      scopedSimIds
     ] = await Promise.all([
       Device.find({ user: deviceOwnerId }),
       Campaign.find({ user: userId }),
@@ -56,13 +67,15 @@ exports.getDashboardStats = async (req, res) => {
       CampaignStats.find({ user: userId, date: { $gte: yesterday, $lt: today } }),
       ContactList.find({ user: userId }),
       Sim.find(simFilter).populate('device', 'name status'),
-      SimMessages.find({
-        sim: { $in: await Sim.find(simFilter).select('_id') }
-      })
-        .sort({ createdAt: -1 })
-        .limit(10)
-        .populate('sim', 'phoneNumber operator')
+      scopedSimIdsPromise
     ]);
+
+    const recentMessages = await SimMessages.find({
+      sim: { $in: scopedSimIds.map(sim => sim._id) }
+    })
+      .sort({ createdAt: -1 })
+      .limit(10)
+      .populate('sim', 'phoneNumber operator');
 
     console.log({ todayStats, yesterdayStats });
 
@@ -71,8 +84,8 @@ exports.getDashboardStats = async (req, res) => {
     const activeDevices = devices.filter(d => d.status === 'online').length;
 
     // SIM Statistics - Updated to include daily limits
-    const totalSIMs = devices?.[0]?.totalSlots;
-    const activeSIMs = devices?.[0]?.activeSlots;
+    const totalSIMs = sims.length;
+    const activeSIMs = sims.filter(sim => sim.inserted && sim.slotActive && sim.status === 'active').length;
     const simsWithSignal = sims.filter(sim => sim.signalStrength && sim.signalStrength > 0);
     const averageSignal = simsWithSignal.length > 0
       ? simsWithSignal.reduce((sum, sim) => sum + sim.signalStrength, 0) / simsWithSignal.length
@@ -176,7 +189,7 @@ exports.getDashboardStats = async (req, res) => {
         // SIM Health
         simHealth: {
           active: activeSIMs,
-          inactive: totalSIMs - activeSIMs,
+          inactive: Math.max(0, totalSIMs - activeSIMs),
           goodSignal: sims.filter(sim => sim.signalStrength > 20).length,
           weakSignal: sims.filter(sim => sim.signalStrength <= 20 && sim.signalStrength > 0).length,
           // Add daily limit info
@@ -242,10 +255,11 @@ exports.getDashboardDevices = async (req, res) => {
     const devicesWithSims = await Promise.all(
       devices.map(async (device) => {
         let currentSimFilter = { device: device._id };
+        const accessibleSimIds = getAccessibleSimIds(req.user);
 
-        // If user is not admin and has assigned SIMs, filter by those
-        if (req.user.role !== 'admin' && req.user.assignedSims && req.user.assignedSims.length > 0) {
-          currentSimFilter._id = { $in: req.user.assignedSims };
+        // If user is not admin, only include assigned SIMs
+        if (accessibleSimIds !== null) {
+          currentSimFilter._id = { $in: accessibleSimIds };
         }
 
         const sims = await Sim.find(currentSimFilter)
@@ -266,8 +280,8 @@ exports.getDashboardDevices = async (req, res) => {
           status: device.status,
           ipAddress: device.ipAddress,
           location: device.location,
-          totalSlots: device.totalSlots,
-          activeSlots: device.activeSlots,
+          totalSlots: sims.length,
+          activeSlots: activeSims.length,
           lastSeen: device.lastSeen,
           temperature: device.temperature,
           uptime: device.uptime,
@@ -316,7 +330,7 @@ exports.getDashboardDevices = async (req, res) => {
         summary: {
           totalDevices: devices.length,
           onlineDevices: devices.filter(d => d.status === 'online').length,
-          totalSIMs: devices.reduce((sum, device) => sum + device.totalSlots, 0),
+          totalSIMs: devicesWithSims.reduce((sum, device) => sum + device.totalSlots, 0),
           activeSIMs: devicesWithSims.reduce((sum, device) => sum + device.activeSlots, 0),
           // Add SIM daily usage summary
           simDailyUsage: {
@@ -354,6 +368,8 @@ exports.getActiveSIMs = async (req, res) => {
     const userDevices = await Device.find({ user: deviceOwnerId }).select('_id');
     const deviceIds = userDevices.map(device => device._id);
 
+    const accessibleSimIds = getAccessibleSimIds(req.user);
+
     // Build SIM filter based on user role
     let simFilter = {
       device: { $in: deviceIds },
@@ -362,10 +378,10 @@ exports.getActiveSIMs = async (req, res) => {
       status: 'active'
     };
 
-    // If user is regular user with assigned SIMs, filter by those
-    if (userRole === 'user' && req.user.assignedSims && req.user.assignedSims.length > 0) {
-      simFilter._id = { $in: req.user.assignedSims };
-      console.log(`User is regular user, filtering by assignedSims: ${req.user.assignedSims}`);
+    // If user is regular user, only include assigned SIMs
+    if (accessibleSimIds !== null) {
+      simFilter._id = { $in: accessibleSimIds };
+      console.log(`User is regular user, filtering by assignedSims: ${accessibleSimIds}`);
     }
 
     // Get active SIMs with daily usage

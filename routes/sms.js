@@ -8,7 +8,7 @@ router.get("/", auth, SimMessagesController.getSMS);
 // POST /api/sms
 router.post("/", auth, SimMessagesController.createSms);
 
-router.post("/send", SimMessagesController.sendSMS);
+router.post("/send", auth, SimMessagesController.sendSMS);
 
 // POST /api/sms/markAsRead
 router.post("/markAsRead/:messageId", auth, SimMessagesController.markAsRead);

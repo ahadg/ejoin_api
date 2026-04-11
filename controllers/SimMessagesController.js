@@ -10,6 +10,26 @@ const DeviceClient = require("../services/deviceClient");
 const STOP_KEYWORDS = new Set(['stop', 'arret', 'arrêt']);
 const START_KEYWORDS = new Set(['start']);
 
+function getAccessibleSimIds(user) {
+  if (user?.role === 'admin') {
+    return null;
+  }
+
+  return Array.isArray(user?.assignedSims) ? user.assignedSims : [];
+}
+
+async function getScopedSimIdsForDevice(user, deviceId) {
+  const simFilter = { device: deviceId };
+  const accessibleSimIds = getAccessibleSimIds(user);
+
+  if (accessibleSimIds !== null) {
+    simFilter._id = { $in: accessibleSimIds };
+  }
+
+  const sims = await Sim.find(simFilter).select('_id port slot phoneNumber');
+  return sims;
+}
+
 function normalizeSmsCommand(text = '') {
   return text
     .trim()
@@ -36,13 +56,24 @@ exports.getSMS = async (req, res) => {
   try {
     const { simId, deviceId, limit = 50 } = req.query;
     const query = {};
+    const accessibleSimIds = getAccessibleSimIds(req.user);
 
-    if (simId) query.sim = simId;
+    if (simId) {
+      if (accessibleSimIds !== null && !accessibleSimIds.some(id => id.toString() === String(simId))) {
+        return res.status(403).json({ code: 403, reason: "Access denied for this SIM" });
+      }
+
+      query.sim = simId;
+    }
 
     if (deviceId) {
-      // Find all sims for the device
-      const sims = await Sim.find({ device: deviceId }).select("_id");
+      // Find all accessible sims for the device
+      const sims = await getScopedSimIdsForDevice(req.user, deviceId);
       query.sim = { $in: sims.map(s => s._id) };
+    }
+
+    if (!simId && !deviceId && accessibleSimIds !== null) {
+      query.sim = { $in: accessibleSimIds };
     }
 
     const messages = await SimMessages.find(query)
@@ -70,8 +101,8 @@ exports.getConversations = async (req, res) => {
       return res.status(400).json({ code: 400, reason: "deviceId is required" });
     }
 
-    // Get all SIMs for the device
-    const sims = await Sim.find({ device: deviceId }).select("_id port slot phoneNumber");
+    // Get all accessible SIMs for the device
+    const sims = await getScopedSimIdsForDevice(req.user, deviceId);
 
     // Aggregate messages by SIM and contact
     const conversations = await SimMessages.aggregate([
@@ -160,6 +191,7 @@ exports.getConversations = async (req, res) => {
 exports.getConversationMessages = async (req, res) => {
   try {
     const { simId, contactId, phoneNumber, port, slot, deviceId } = req.query;
+    const accessibleSimIds = getAccessibleSimIds(req.user);
 
     if ((!simId && (!port || !slot || !deviceId)) || (!contactId && !phoneNumber)) {
       return res.status(400).json({
@@ -173,13 +205,22 @@ exports.getConversationMessages = async (req, res) => {
 
     // ✅ Use simId directly if provided
     if (simId) {
-      sim = { _id: simId };
+      if (accessibleSimIds !== null && !accessibleSimIds.some(id => id.toString() === String(simId))) {
+        return res.status(403).json({ code: 403, reason: "Access denied for this SIM" });
+      }
+
+      sim = await Sim.findById(simId).select("_id port slot phoneNumber");
     } else {
-      sim = await Sim.findOne({
+      const simFilter = {
         device: deviceId,
-        port: parseInt(port),
-        //slot: parseInt(slot)
-      }).select("_id port slot phoneNumber");
+        port: parseInt(port)
+      };
+
+      if (accessibleSimIds !== null) {
+        simFilter._id = { $in: accessibleSimIds };
+      }
+
+      sim = await Sim.findOne(simFilter).select("_id port slot phoneNumber");
     }
 
     if (!sim) {
@@ -258,6 +299,11 @@ exports.sendSMS = async (req, res) => {
     
     if (!sim) {
       return res.status(404).json({ code: 404, reason: "SIM not found for specified port and slot" });
+    }
+
+    const accessibleSimIds = getAccessibleSimIds(req.user);
+    if (accessibleSimIds !== null && !accessibleSimIds.some(id => id.toString() === sim._id.toString())) {
+      return res.status(403).json({ code: 403, reason: "Access denied for this SIM" });
     }
 
     // Find or create contact for recipient
@@ -1087,4 +1133,3 @@ exports.webhookHealth = async (req, res) => {
     res.status(500).json({ status: 'unhealthy', error: error.message });
   }
 };
-
