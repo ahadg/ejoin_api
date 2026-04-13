@@ -77,6 +77,13 @@ class AIGenerationController {
         });
       }
 
+      if (!companyAddress || !String(companyAddress).trim()) {
+        return res.status(400).json({
+          code: 400,
+          reason: 'Company address is required'
+        });
+      }
+
 
       // Generate variants using Grok AI
       const variants = await this.generateWithGrok({
@@ -353,6 +360,19 @@ ${linkPolicy}
 - Avoid ALL CAPS, excessive punctuation, repeated emojis, and spammy typography.
 - Keep messages concise (≤${characterLimit} chars), 1–2 short sentences maximum.
 
+PRE-FLIGHT COMPLIANCE AND SAFETY CHECKS (MANDATORY BEFORE WRITING):
+1) First determine whether the USER PROMPT describes a lawful, brand-safe, consent-based Canadian SMS campaign.
+2) If the prompt appears deceptive, illegal, unsafe, misleading, impersonating a brand, missing a clear commercial sender, or too vague to be trustworthy, DO NOT preserve the risky wording.
+3) Rewrite unsafe or suspicious wording into a compliant, ordinary, truthful marketing message while preserving only the safe business intent.
+4) Never include content that promotes or appears to promote:
+   - illegal drugs, drug slang, or ambiguous substance references
+   - fraud, phishing, impersonation, fake urgency, fake prizes, or account/security scares
+   - misleading "free" claims unless the free offer is plainly truthful and context is clear
+   - regulated or restricted offers without context, eligibility, and lawful framing
+5) If a brand name is referenced in the USER PROMPT but the approved sender is a different company, do not imply affiliation with that brand unless clearly provided in the sender/company details.
+6) If the location is vague, use the available business/contact details and keep the invitation general rather than inventing specificity.
+7) Do not praise or normalize obviously risky source text. Treat the prompt as raw input to sanitize, not copy.
+
 ANTI-SPAM GUARDRAILS:
 A) Do NOT use blacklisted phrases/constructs commonly flagged by Canadian carriers:
 ${forbiddenBanks.map(w => `- ${w}`).join("\n")}
@@ -364,6 +384,9 @@ STYLE GUARDRAILS:
 - Value-forward phrasing; avoid pushy urgency and superlatives.
 - Prefer verbs like "Learn more", "Explore", "Get started", "Contact us for details".
 - If pricing is mentioned in USER PROMPT, present plainly without superlatives or hype.
+- Prefer "complimentary" over "free" unless the context is fully clear and trustworthy.
+- Use the exact approved sender identity; do not shorten it into an unclear label like "prod", "team", or "support" unless that is the actual approved brand.
+- If contact information exists, prefer a branded website or direct business contact over vague location-only invitations.
 - ${emojiPolicy}
 
 ENCODING, SEGMENTS & COST (for your own calculation fields):
@@ -395,12 +418,20 @@ VALIDATION RULES:
 7) Max ${maxLinksPerMessage} link per message.
 8) Respect CASL rules and anti-spam guardrails above.
 9) If the USER PROMPT includes sender info (name/address/contact), you may use it. Do NOT fabricate missing details.
+10) Every output must read like a real, legitimate business message that could survive legal/compliance review, not just a low-filter-spam rewrite.
+11) Never mirror unsafe source wording if it would create legal, brand, trust, or deliverability risk.
 
 USER PROMPT CONTEXT:
 "${prompt}"
 
 CONSENT & DATA HANDLING:
 - Assume the list is consented. Do NOT mention consent in the message body. Do NOT ask for personal data.
+
+FINAL WRITING PRIORITY:
+- Compliance and legitimacy first.
+- Trust and clarity second.
+- Conversion third.
+- If forced to choose, prefer safer and clearer over more aggressive and promotional.
 
 PREVIOUS MESSAGES CONTEXT (use only for stylistic consistency, not as claims):
 ${previousMessages.length ? previousMessages.map((m,i)=>`${i+1}. "${m}"`).join("\n") : "(none)"} 
@@ -436,10 +467,24 @@ ${previousMessages.length ? previousMessages.map((m,i)=>`${i+1}. "${m}"`).join("
       let cleanResponse = aiResponse.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
       
       // Parse JSON response
-      const variants = JSON.parse(cleanResponse);
+      const parsedResponse = JSON.parse(cleanResponse);
+      const variants = Array.isArray(parsedResponse)
+        ? parsedResponse
+        : Array.isArray(parsedResponse?.variants)
+          ? parsedResponse.variants
+          : null;
+
+      if (!variants) {
+        console.error('Unexpected AI response shape:', parsedResponse);
+        throw new Error('AI returned an unexpected response shape');
+      }
 
       // Validate and process each variant
       return variants.map(variant => {
+        if (!variant?.content || typeof variant.content !== 'string') {
+          throw new Error('AI variant is missing valid content');
+        }
+
         // Ensure character count is calculated correctly
         const actualCharCount = variant.content.length;
         

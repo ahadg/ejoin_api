@@ -1,15 +1,13 @@
 // services/campaignService.js
 const Campaign = require('../models/Campaign');
-const ContactList = require('../models/ContactList');
 const Contact = require('../models/Contact');
 const Device = require('../models/Device');
 const Sim = require('../models/Sim');
-const User = require('../models/User');
 const redis = require('../config/redis');
 const DeviceClient = require('./deviceClient');
-const aiGenerationController = require('../controllers/aiGenerationController');
 const messageTrackingService = require('./messageTrackingService');
-const MessageSentDetails = require('../models/MessageSentDetails');
+const CampaignSimService = require('./campaignSimService');
+const CampaignVariantService = require('./campaignVariantService');
 
 class CampaignService {
   constructor() {
@@ -18,6 +16,12 @@ class CampaignService {
     this.messageTracking = messageTrackingService;
     this.simRoundRobinIndex = new Map(); // campaignId -> current SIM index
     this.variantRoundRobinIndex = new Map(); // campaignId -> current variant index
+    this.simService = new CampaignSimService({
+      simRoundRobinIndex: this.simRoundRobinIndex
+    });
+    this.variantService = new CampaignVariantService({
+      variantRoundRobinIndex: this.variantRoundRobinIndex
+    });
     this.init();
   }
 
@@ -69,188 +73,27 @@ class CampaignService {
 
   // Get available SIMs for a device in circular order
   async getAvailableSims(deviceId, campaignId) {
-    try {
-      console.log("deviceId", deviceId, "campaignId", campaignId);
-
-      // Get campaign and populate user to check role
-      const campaign = await Campaign.findById(campaignId).populate('user');
-      if (!campaign) {
-        throw new Error(`Campaign ${campaignId} not found`);
-      }
-
-      let sims = [];
-
-      // If user role is 'user', get SIMs from assignedSims
-      if (campaign.user.role === 'user' && campaign.user.assignedSims && campaign.user.assignedSims.length > 0) {
-        console.log(`User is regular user, fetching from assignedSims: ${campaign.user.assignedSims}`);
-
-        // Fetch SIMs by IDs from assignedSims array
-        sims = await Sim.find({
-          _id: { $in: campaign.user.assignedSims },
-          device: deviceId,
-          inserted: true,
-          slotActive: true,
-          status: 'active'
-        }).sort({ port: 1, slot: 1 });
-      } else {
-        // Admin user - get all active SIMs for the device
-        console.log(`User is admin, fetching all active SIMs for device`);
-        sims = await Sim.find({
-          device: deviceId,
-          inserted: true,
-          slotActive: true,
-          status: 'active'
-        }).sort({ port: 1, slot: 1 });
-      }
-
-      if (sims.length === 0) {
-        throw new Error(`No active SIMs found for device ${deviceId}`);
-      }
-
-      // Check daily limits for each SIM
-      const availableSims = [];
-      for (const sim of sims) {
-        // Reset daily count if it's a new day
-        await this.resetSimDailyCountIfNeeded(sim);
-
-        if (sim.dailySent < sim.dailyLimit) {
-          availableSims.push(sim);
-        }
-      }
-
-      if (availableSims.length === 0) {
-        throw new Error(`All SIMs have reached their daily limits for device ${deviceId}`);
-      }
-
-      return availableSims;
-    } catch (error) {
-      console.error('Error getting available SIMs:', error);
-      throw error;
-    }
+    return this.simService.getAvailableSims(deviceId, campaignId);
   }
 
   // Reset SIM daily count if it's a new day
   async resetSimDailyCountIfNeeded(sim) {
-    const today = new Date().toDateString();
-    const lastReset = sim.lastResetDate.toDateString();
-
-    if (today !== lastReset) {
-      await Sim.findByIdAndUpdate(sim._id, {
-        dailySent: 0,
-        todaySent: 0,
-        lastResetDate: new Date()
-      });
-    }
+    return this.simService.resetSimDailyCountIfNeeded(sim);
   }
 
   // Get SIM for contact (with affinity)
   async getSimForContact(deviceId, campaignId, contact) {
-    try {
-      // Check if contact already has an assigned SIM
-      if (contact.assignedSim?.simId) {
-        const assignedSim = await Sim.findById(contact.assignedSim.simId);
-
-        // Verify the SIM is still available and within limits
-        if (assignedSim &&
-          assignedSim.device.toString() === deviceId.toString() &&
-          assignedSim.inserted &&
-          assignedSim.slotActive &&
-          assignedSim.status === 'active') {
-
-          // Check if SIM is within daily limits
-          if (assignedSim.dailySent < assignedSim.dailyLimit) {
-            console.log(`Using assigned SIM ${assignedSim._id} for contact ${contact.phoneNumber}`);
-
-            // Update last used timestamp
-            await this.updateContactSimUsage(contact._id, assignedSim._id);
-
-            return assignedSim;
-          } else {
-            console.log(`Assigned SIM ${assignedSim._id} reached daily limit for contact ${contact.phoneNumber}`);
-          }
-        } else {
-          console.log(`Assigned SIM not available for contact ${contact.phoneNumber}, finding new SIM`);
-        }
-      }
-
-      // If no assigned SIM or assigned SIM is not available, get next available SIM
-      const availableSims = await this.getAvailableSims(deviceId, campaignId);
-
-      if (availableSims.length === 0) {
-        throw new Error(`No available SIMs found for device ${deviceId}`);
-      }
-
-      // Use round-robin to select a SIM
-      if (!this.simRoundRobinIndex.has(campaignId)) {
-        this.simRoundRobinIndex.set(campaignId, 0);
-      }
-
-      let currentIndex = this.simRoundRobinIndex.get(campaignId);
-      let selectedSim = null;
-      let attempts = 0;
-
-      while (attempts < availableSims.length && !selectedSim) {
-        const sim = availableSims[currentIndex];
-        const freshSim = await Sim.findById(sim._id);
-
-        if (freshSim && freshSim.dailySent < freshSim.dailyLimit) {
-          selectedSim = freshSim;
-          // Update index for next call
-          const nextIndex = (currentIndex + 1) % availableSims.length;
-          this.simRoundRobinIndex.set(campaignId, nextIndex);
-        }
-
-        currentIndex = (currentIndex + 1) % availableSims.length;
-        attempts++;
-      }
-
-      if (!selectedSim) {
-        throw new Error('No available SIMs found within daily limits');
-      }
-
-      // Assign this SIM to the contact for future messages
-      await this.assignSimToContact(contact._id, selectedSim._id, deviceId);
-      console.log(`Assigned new SIM ${selectedSim._id} to contact ${contact.phoneNumber}`);
-
-      return selectedSim;
-
-    } catch (error) {
-      console.error('Error getting SIM for contact:', error);
-      throw error;
-    }
+    return this.simService.getSimForContact(deviceId, campaignId, contact);
   }
 
   // Assign SIM to contact
   async assignSimToContact(contactId, simId, deviceId) {
-    try {
-      await Contact.findByIdAndUpdate(contactId, {
-        $set: {
-          'assignedSim': {
-            simId: simId,
-            deviceId: deviceId,
-            assignedAt: new Date(),
-            lastUsedAt: new Date()
-          }
-        }
-      });
-    } catch (error) {
-      console.error(`Error assigning SIM to contact ${contactId}:`, error);
-      throw error;
-    }
+    return this.simService.assignSimToContact(contactId, simId, deviceId);
   }
 
   // Update SIM usage timestamp for contact
   async updateContactSimUsage(contactId, simId) {
-    try {
-      await Contact.findByIdAndUpdate(contactId, {
-        $set: {
-          'assignedSim.lastUsedAt': new Date()
-        }
-      });
-    } catch (error) {
-      console.error(`Error updating SIM usage for contact ${contactId}:`, error);
-      // Don't throw - this shouldn't break the main flow
-    }
+    return this.simService.updateContactSimUsage(contactId, simId);
   }
 
   // FIXED: Proper timezone conversion
@@ -743,163 +586,7 @@ class CampaignService {
 
   // Generate message variant (AI or static) with round-robin for multiple variants
   async generateMessageVariant(campaignId, taskSettings, contact) {
-    const campaign = await Campaign.findById(campaignId)
-      .populate('message')
-      .populate({
-        path: 'message',
-        populate: { path: 'variants', model: 'MessageVariant' }
-      });
-
-    console.log("generateMessageVariant_start", {
-      campaignId,
-      messageVariationType: campaign?.taskSettings?.messageVariationType,
-      useAiGeneration: campaign?.taskSettings?.useAiGeneration,
-      contact: contact?.phoneNumber
-    });
-
-    // Handle single_variant type - use campaign's messageContent
-    if (campaign?.taskSettings?.messageVariationType === 'single_variant') {
-      console.log("Using single variant from messageContent");
-      return {
-        content: campaign.messageContent || 'Default message',
-        variantId: 'single-base-message',
-        tone: 'Professional',
-        characterCount: (campaign.messageContent || 'Default message').length
-      };
-    }
-
-    // Handle multiple_variants type - use round-robin selection from message variants
-    if (campaign?.taskSettings?.messageVariationType === 'multiple_variants') {
-      if (campaign?.message?.variants && campaign.message.variants.length > 0) {
-        // Initialize round-robin index for this campaign if not exists
-        if (!this.variantRoundRobinIndex.has(campaignId)) {
-          this.variantRoundRobinIndex.set(campaignId, 0);
-        }
-
-        // Get current index and select variant
-        const currentIndex = this.variantRoundRobinIndex.get(campaignId);
-        const selectedVariant = campaign.message.variants[currentIndex];
-
-        // Update index for next call (circular)
-        const nextIndex = (currentIndex + 1) % campaign.message.variants.length;
-        this.variantRoundRobinIndex.set(campaignId, nextIndex);
-
-        console.log("Selected round-robin variant:", {
-          variantId: selectedVariant._id,
-          index: currentIndex,
-          totalVariants: campaign.message.variants.length,
-          nextIndex: nextIndex
-        });
-
-        return {
-          content: selectedVariant.content,
-          variantId: selectedVariant._id,
-          tone: selectedVariant.tone || 'Professional',
-          characterCount: selectedVariant.characterCount
-        };
-      } else {
-        console.log("No variants found, falling back to base message");
-        return {
-          content: campaign?.messageContent || 'Default message',
-          variantId: 'fallback-base-message',
-          tone: 'Professional',
-          characterCount: (campaign?.messageContent || 'Default message').length
-        };
-      }
-    }
-
-    // Handle ai_random type - generate AI variant (without uniqueness check)
-    if (campaign?.taskSettings?.messageVariationType === 'ai_random' ||
-      campaign?.taskSettings?.useAiGeneration) {
-
-      console.log("current_campaign:", campaign);
-      console.log("current_campaign_message:", campaign?.message);
-      console.log("current_campaign_message_settings:", campaign?.message?.settings);
-      console.log("current_campaign_message_characterLimit:", campaign?.message?.settings?.characterLimit);
-
-      // Get previous messages to guide AI generation (but no uniqueness enforcement)
-      const previousMessages = await this.getPreviousCampaignMessages(campaignId);
-      console.log(`Found ${previousMessages.length} previous messages for context`);
-
-      // Use the AI generation controller with previous messages as context only
-      try {
-        const aiResponse = await aiGenerationController.generateWithGrok({
-          prompt: campaign?.message?.originalPrompt || campaign?.message?.baseMessage,
-          variantCount: 1,
-          characterLimit: campaign?.message?.settings?.get("characterLimit"),
-          tones: campaign?.message?.settings?.get("tones"),
-          languages: campaign?.message?.settings?.get("languages"),
-          creativityLevel: campaign?.message?.settings?.get("creativityLevel"),
-          includeEmojis: campaign?.message?.settings?.get("includeEmojis"),
-          companyName: campaign?.message?.settings?.get("companyName") || '',
-          companyAddress: campaign?.message?.settings?.get("companyAddress") || '',
-          companyEmail: campaign?.message?.settings?.get("companyEmail") || '',
-          companyPhone: campaign?.message?.settings?.get("companyPhone") || '',
-          companyWebsite: campaign?.message?.settings?.get("companyWebsite") || '',
-          unsubscribeText: campaign?.message?.settings?.get("unsubscribeText"),
-          customInstructions: campaign?.message?.settings?.get("customInstructions"),
-          category: campaign?.message?.category,
-          previousMessages: previousMessages // Pass previous messages for context only
-        });
-
-        console.log("aiResponse", aiResponse);
-        console.log("aiResponse_content", aiResponse?.[0]?.content);
-
-        if (aiResponse && aiResponse[0]?.content) {
-          const variant = aiResponse?.[0];
-          console.log("AI variant generated successfully");
-          return {
-            content: variant.content,
-            variantId: `ai-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-            tone: variant.tone || 'AI-Generated',
-            characterCount: variant.characterCount
-          };
-        }
-      } catch (error) {
-        console.error('AI message generation failed, using fallback:', error);
-        // Fall through to fallback options
-      }
-
-      // AI fallback: use round-robin for message variants if available
-      if (campaign?.message?.variants && campaign.message.variants.length > 0) {
-        // Initialize round-robin index for fallback
-        if (!this.variantRoundRobinIndex.has(campaignId)) {
-          this.variantRoundRobinIndex.set(campaignId, 0);
-        }
-
-        const currentIndex = this.variantRoundRobinIndex.get(campaignId);
-        const selectedVariant = campaign.message.variants[currentIndex];
-
-        const nextIndex = (currentIndex + 1) % campaign.message.variants.length;
-        this.variantRoundRobinIndex.set(campaignId, nextIndex);
-
-        console.log("AI failed, using round-robin variant as fallback");
-        return {
-          content: selectedVariant.content,
-          variantId: selectedVariant._id,
-          tone: selectedVariant.tone || 'Professional',
-          characterCount: selectedVariant.characterCount
-        };
-      }
-
-      // Final fallback: use base message
-      console.log("Using base message as final fallback");
-      return {
-        content: campaign?.messageContent || campaign?.taskSettings?.aiPrompt || 'Default message',
-        variantId: 'ai-fallback-base-message',
-        tone: 'Professional',
-        characterCount: (campaign?.messageContent || campaign?.taskSettings?.aiPrompt || 'Default message').length
-      };
-    }
-
-    // Default fallback if no conditions matched
-    console.log("No message variation type specified, using default");
-    return {
-      content: campaign?.messageContent || 'Default message',
-      variantId: 'default-base-message',
-      tone: 'Professional',
-      characterCount: (campaign?.messageContent || 'Default message').length
-    };
+    return this.variantService.generateMessageVariant(campaignId, taskSettings, contact);
   }
 
   // Check daily message limits
@@ -1162,21 +849,7 @@ class CampaignService {
   }
 
   async getPreviousCampaignMessages(campaignId, limit = 50) {
-    try {
-      const previousMessages = await MessageSentDetails.find({
-        campaign: campaignId,
-        status: { $in: ['sent', 'delivered'] }
-      })
-        .select('content -_id')
-        .sort({ createdAt: -1 })
-        .limit(limit)
-        .lean();
-
-      return previousMessages.map(msg => msg.content);
-    } catch (error) {
-      console.error(`Error fetching previous messages for campaign ${campaignId}:`, error);
-      return [];
-    }
+    return this.variantService.getPreviousCampaignMessages(campaignId, limit);
   }
 
   // Reset daily counts (run this daily via cron). Now requeues paused campaigns.
@@ -1302,100 +975,22 @@ class CampaignService {
 
   // Get contact's assigned SIM information
   async getContactSimInfo(contactId) {
-    try {
-      const contact = await Contact.findById(contactId)
-        .populate('assignedSim.simId')
-        .populate('assignedSim.deviceId');
-
-      if (!contact || !contact.assignedSim) {
-        return null;
-      }
-
-      return {
-        sim: contact.assignedSim.simId,
-        device: contact.assignedSim.deviceId,
-        assignedAt: contact.assignedSim.assignedAt,
-        lastUsedAt: contact.assignedSim.lastUsedAt
-      };
-    } catch (error) {
-      console.error(`Error getting contact SIM info for ${contactId}:`, error);
-      return null;
-    }
+    return this.simService.getContactSimInfo(contactId);
   }
 
   // Reassign SIM to contact (manual override)
   async reassignSimToContact(contactId, newSimId, deviceId) {
-    try {
-      await this.assignSimToContact(contactId, newSimId, deviceId);
-      console.log(`Manually reassigned SIM ${newSimId} to contact ${contactId}`);
-      return { success: true };
-    } catch (error) {
-      console.error(`Error reassigning SIM to contact ${contactId}:`, error);
-      throw error;
-    }
+    return this.simService.reassignSimToContact(contactId, newSimId, deviceId);
   }
 
   // Get campaign SIM usage statistics
   async getCampaignSimUsage(campaignId) {
-    try {
-      const campaign = await Campaign.findById(campaignId).populate('contactList');
-      if (!campaign) {
-        throw new Error('Campaign not found');
-      }
-
-      // Get all contacts in this campaign with their assigned SIMs
-      const contacts = await Contact.find({
-        contactList: campaign.contactList._id
-      })
-        .populate('assignedSim.simId')
-        .select('phoneNumber assignedSim');
-
-      // Group by SIM
-      const simUsage = {};
-      let contactsWithSim = 0;
-      let contactsWithoutSim = 0;
-
-      contacts.forEach(contact => {
-        if (contact.assignedSim?.simId) {
-          const simId = contact.assignedSim.simId._id.toString();
-          if (!simUsage[simId]) {
-            simUsage[simId] = {
-              sim: contact.assignedSim.simId,
-              contactCount: 0,
-              contacts: []
-            };
-          }
-          simUsage[simId].contactCount++;
-          simUsage[simId].contacts.push({
-            phoneNumber: contact.phoneNumber,
-            assignedAt: contact.assignedSim.assignedAt,
-            lastUsedAt: contact.assignedSim.lastUsedAt
-          });
-          contactsWithSim++;
-        } else {
-          contactsWithoutSim++;
-        }
-      });
-
-      return {
-        campaignId,
-        campaignName: campaign.name,
-        totalContacts: contacts.length,
-        contactsWithSim,
-        contactsWithoutSim,
-        simUsage: Object.values(simUsage)
-      };
-    } catch (error) {
-      console.error(`Error getting campaign SIM usage for ${campaignId}:`, error);
-      throw error;
-    }
+    return this.simService.getCampaignSimUsage(campaignId);
   }
 
   // Reset variant round-robin index for a campaign
   async resetVariantRoundRobin(campaignId) {
-    this.variantRoundRobinIndex.set(campaignId, 0);
-    console.log(`Reset variant round-robin index for campaign ${campaignId}`);
-    return { success: true };
+    return this.variantService.resetVariantRoundRobin(campaignId);
   }
 
   // NEW: Check all campaigns for time restrictions (to be called by cron job)
