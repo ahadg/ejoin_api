@@ -1,6 +1,7 @@
 const Campaign = require('../models/Campaign');
 const Contact = require('../models/Contact');
 const Sim = require('../models/Sim');
+const User = require('../models/User');
 
 class CampaignSimService {
   constructor({ simRoundRobinIndex }) {
@@ -23,13 +24,21 @@ class CampaignSimService {
   }
 
   async getCampaignScopedSims(campaign, deviceId) {
-    const assignedSimIds =
-      campaign?.user?.role === 'user' ? (campaign.user.assignedSims || []) : null;
-
-    if (assignedSimIds) {
-      console.log(`User is regular user, fetching from assignedSims: ${assignedSimIds}`);
-    } else {
+    if (campaign?.user?.role !== 'user') {
       console.log(`User is admin, fetching all active SIMs for device`);
+      return Sim.find(this.buildActiveSimQuery(deviceId, null)).sort({ port: 1, slot: 1 });
+    }
+
+    const userId = campaign?.user?._id || campaign?.user;
+    const freshUser = await User.findById(userId).select('role assignedSims');
+    const assignedSimIds = Array.isArray(freshUser?.assignedSims) ? freshUser.assignedSims : [];
+
+    console.log(
+      `User is regular user, fetching from assignedSims (${assignedSimIds.length}): ${assignedSimIds.join(', ')}`
+    );
+
+    if (assignedSimIds.length === 0) {
+      throw new Error(`No SIMs assigned to user ${userId}`);
     }
 
     return Sim.find(this.buildActiveSimQuery(deviceId, assignedSimIds)).sort({ port: 1, slot: 1 });
@@ -68,7 +77,7 @@ class CampaignSimService {
       }
 
       const sims = await this.getCampaignScopedSims(campaign, deviceId);
-
+      console.log("sims", sims)
       if (sims.length === 0) {
         throw new Error(`No active SIMs found for device ${deviceId}`);
       }
@@ -130,18 +139,20 @@ class CampaignSimService {
 
         if (this.isSimAvailableForSending(assignedSim, deviceId)) {
           if (assignedSim.dailySent < assignedSim.dailyLimit) {
-            console.log(`Using assigned SIM ${assignedSim._id} for contact ${contact.phoneNumber}`);
+            console.log(`Using assigned SIM ${assignedSim._id} for contact ${contact.phoneNumber}. dailySent: ${assignedSim.dailySent}/${assignedSim.dailyLimit}`);
             await this.updateContactSimUsage(contact._id);
             return assignedSim;
           }
 
-          console.log(`Assigned SIM ${assignedSim._id} reached daily limit for contact ${contact.phoneNumber}`);
+          console.log(`Assigned SIM ${assignedSim._id} reached daily limit (${assignedSim.dailySent}/${assignedSim.dailyLimit}) for contact ${contact.phoneNumber}`);
         } else {
-          console.log(`Assigned SIM not available for contact ${contact.phoneNumber}, finding new SIM`);
+          console.log(`Assigned SIM ${assignedSim?._id || contact.assignedSim.simId} not available (inserted: ${assignedSim?.inserted}, status: ${assignedSim?.status}) for contact ${contact.phoneNumber}, finding new SIM`);
         }
       }
 
       const availableSims = await this.getAvailableSims(deviceId, campaignId);
+      console.log(`Found ${availableSims.length} available SIMs for device ${deviceId} and campaign ${campaignId}`);
+
       if (availableSims.length === 0) {
         throw new Error(`No available SIMs found for device ${deviceId}`);
       }
@@ -154,14 +165,24 @@ class CampaignSimService {
       let selectedSim = null;
       let attempts = 0;
 
+      console.log(`Starting round-robin from index ${currentIndex}`);
+
       while (attempts < availableSims.length && !selectedSim) {
         const sim = availableSims[currentIndex];
         const freshSim = await Sim.findById(sim._id);
 
-        if (freshSim && freshSim.dailySent < freshSim.dailyLimit) {
-          selectedSim = freshSim;
-          const nextIndex = (currentIndex + 1) % availableSims.length;
-          this.simRoundRobinIndex.set(campaignId, nextIndex);
+        if (freshSim) {
+          console.log(`Checking SIM ${freshSim._id}: dailySent=${freshSim.dailySent}, dailyLimit=${freshSim.dailyLimit}`);
+          if (freshSim.dailySent < freshSim.dailyLimit) {
+            selectedSim = freshSim;
+            const nextIndex = (currentIndex + 1) % availableSims.length;
+            this.simRoundRobinIndex.set(campaignId, nextIndex);
+            console.log(`Selected SIM ${freshSim._id}. Next index will be ${nextIndex}`);
+          } else {
+            console.log(`SIM ${freshSim._id} has reached limit. dailySent: ${freshSim.dailySent}, dailyLimit: ${freshSim.dailyLimit}`);
+          }
+        } else {
+          console.log(`SIM ${sim._id} not found in database during fresh check`);
         }
 
         currentIndex = (currentIndex + 1) % availableSims.length;
@@ -169,7 +190,7 @@ class CampaignSimService {
       }
 
       if (!selectedSim) {
-        throw new Error('No available SIMs found within daily limits');
+        throw new Error('No available SIMs found within daily limits after checking all');
       }
 
       await this.assignSimToContact(contact._id, selectedSim._id, deviceId);

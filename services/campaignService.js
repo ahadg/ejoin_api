@@ -385,7 +385,13 @@ class CampaignService {
       }
     } catch (error) {
       console.error(`Error getting SIMs for campaign ${campaignId}:`, error);
-      await this.pauseCampaign(campaignId, 'sim_error');
+      const pauseReason =
+        error.message?.includes('No SIMs assigned to user')
+          ? 'no_assigned_sims'
+          : error.message?.includes('No active SIMs found for device')
+            ? 'no_available_sims'
+            : 'sim_error';
+      await this.pauseCampaign(campaignId, pauseReason);
       return;
     }
 

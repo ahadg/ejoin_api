@@ -25,18 +25,18 @@ class DeviceClient {
           password: this.auth.password
         }
       };
-    
+
       if (method === 'POST') {
         config.data = data; // don't spread
-      } else if(isPOST) {
+      } else if (isPOST) {
         config.data = data;
-      }else {
+      } else {
         config.params = {
           ...config.params,
           ...(data || {})
         };
       }
-      console.log("config__",config)
+      console.log("config__", config)
       const response = await axios(config);
       //console.log("raw response", response.data);
       return response.data;
@@ -48,28 +48,28 @@ class DeviceClient {
   }
 
   async setStatusReportServer(config) {
-    console.log("config",config)
-    const response = await this.request('/set_status_report_server',{
+    console.log("config", config)
+    const response = await this.request('/set_status_report_server', {
       enable: config.enable,
       url: config.url,
       period: config.period
-    },  'POST'
+    }, 'POST'
     );
-    
+
     return response;
   }
 
   async getStatusReportServer(config) {
-    const response = await this.request('/get_status_report_server',{},  'GET'
+    const response = await this.request('/get_status_report_server', {}, 'GET'
     );
     return response;
   }
-  
+
 
   // SMS methods - updated for new API structure
   async sendSms(tasks) {
     // The tasks array is sent as the request body
-    console.log("sendSms called",tasks);
+    console.log("sendSms called", tasks);
     return this.request('/submit_sms_tasks', tasks, 'POST');
     //return [ { id: 1086473958, code: 0, reason: 'OK' } ]
   }
@@ -92,7 +92,7 @@ class DeviceClient {
   }
 
   async getSms(sms_id = 1, sms_num = 0, sms_del = 0) {
-    const data = { id : sms_id, num : sms_num, sms_del };
+    const data = { id: sms_id, num: sms_num, sms_del };
     return this.request('/get_received_smses', data, 'GET', true);
   }
 
@@ -121,7 +121,7 @@ class DeviceClient {
     return this.request('/goip_send_cmd.html', params, 'GET');
   }
 
-  
+
 }
 
 module.exports = DeviceClient;
