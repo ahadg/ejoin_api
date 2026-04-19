@@ -3,8 +3,9 @@ const axios = require('axios');
 
 class SpamCheckController {
   constructor() {
-    this.grokApiKey = process.env.GROK_API_KEY;
-    this.grokApiUrl = process.env.GROK_API_URL || 'https://api.x.ai/v1/chat/completions';
+    this.openaiApiKey = process.env.OPENAI_API_KEY;
+    this.openaiApiUrl = process.env.OPENAI_API_URL || 'https://api.openai.com/v1/responses';
+    this.openaiModel = process.env.OPENAI_MODEL || 'gpt-4.1-mini';
   }
 
   // Check spam score for a single message
@@ -31,8 +32,8 @@ class SpamCheckController {
         });
       }
 
-      // Generate comprehensive spam analysis using Grok AI
-      const spamAnalysis = await this.analyzeSpamWithGrok({
+      // Generate comprehensive spam analysis using OpenAI
+      const spamAnalysis = await this.analyzeSpamWithOpenAI({
         message,
         companyName,
         messageCategory
@@ -53,8 +54,64 @@ class SpamCheckController {
     }
   };
 
-  // Private method to analyze spam using Grok AI
-  analyzeSpamWithGrok = async (params) => {
+  getSpamAnalysisSchema = () => ({
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      spamScore: { type: 'number' },
+      riskLevel: { type: 'string' },
+      characterCount: { type: 'integer' },
+      encoding: { type: 'string' },
+      segments: { type: 'integer' },
+      spamIndicators: {
+        type: 'array',
+        items: { type: 'string' }
+      },
+      complianceIssues: {
+        type: 'array',
+        items: { type: 'string' }
+      },
+      carrierFilterRisk: { type: 'string' },
+      improvementSuggestions: {
+        type: 'array',
+        items: { type: 'string' }
+      },
+      overallAssessment: { type: 'string' }
+    },
+    required: [
+      'spamScore',
+      'riskLevel',
+      'characterCount',
+      'encoding',
+      'segments',
+      'spamIndicators',
+      'complianceIssues',
+      'carrierFilterRisk',
+      'improvementSuggestions',
+      'overallAssessment'
+    ]
+  });
+
+  extractOpenAIText = (responseData) => {
+    if (typeof responseData?.output_text === 'string' && responseData.output_text.trim()) {
+      return responseData.output_text.trim();
+    }
+
+    const messageOutput = Array.isArray(responseData?.output)
+      ? responseData.output.find(item => item.type === 'message')
+      : null;
+
+    const textParts = Array.isArray(messageOutput?.content)
+      ? messageOutput.content
+          .filter(item => item.type === 'output_text' && typeof item.text === 'string')
+          .map(item => item.text)
+      : [];
+
+    return textParts.join('\n').trim();
+  };
+
+  // Private method to analyze spam using OpenAI
+  analyzeSpamWithOpenAI = async (params) => {
     const {
       message,
       companyName,
@@ -67,41 +124,63 @@ class SpamCheckController {
     });
 
     const requestData = {
-      model: "grok-3",
-      messages: [
+      model: this.openaiModel,
+      input: [
         {
           role: "system",
-          content: systemPrompt
+          content: [
+            {
+              type: "input_text",
+              text: systemPrompt
+            }
+          ]
         },
         {
           role: "user",
-          content: `Analyze this SMS message for spam indicators:\n\n"${message}"`
+          content: [
+            {
+              type: "input_text",
+              text: `Analyze this SMS message for spam indicators:\n\n"${message}"`
+            }
+          ]
         }
       ],
-      temperature: 0.3,
-      max_tokens: 1500,
-      n: 1
+      text: {
+        format: {
+          type: 'json_schema',
+          name: 'sms_spam_analysis',
+          strict: true,
+          schema: this.getSpamAnalysisSchema()
+        }
+      }
     };
 
     try {
-      const response = await axios.post(this.grokApiUrl, requestData, {
+      const response = await axios.post(this.openaiApiUrl, requestData, {
         headers: {
-          'Authorization': `Bearer ${this.grokApiKey}`,
+          'Authorization': `Bearer ${this.openaiApiKey}`,
           'Content-Type': 'application/json'
         }
       });
       
-      console.log("spam_check_grok_response", response.data);
+      console.log("spam_check_openai_response", response.data);
 
-      const aiResponse = response.data.choices[0].message.content;
+      const aiResponse = this.extractOpenAIText(response.data);
+      if (!aiResponse) {
+        throw new Error('OpenAI returned an empty spam analysis response');
+      }
       
       // Parse the AI response to extract spam analysis
       return this.parseSpamAnalysisResponse(aiResponse, message);
 
     } catch (error) {
-      console.error('Grok API error for spam check:', error.response?.data || error.message);
+      console.error('OpenAI API error for spam check:', error.response?.data || error.message);
       throw new Error('Failed to analyze spam score: ' + (error.response?.data?.error?.message || error.message));
     }
+  };
+
+  analyzeSpamWithGrok = async (params) => {
+    return this.analyzeSpamWithOpenAI(params);
   };
 
   // Build system prompt for spam analysis

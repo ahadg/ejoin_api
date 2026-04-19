@@ -121,7 +121,7 @@ class CampaignVariantService {
       console.log(`Found ${previousMessages.length} previous messages for context`);
 
       try {
-        const aiResponse = await aiGenerationController.generateWithGrok({
+        const aiResponse = await aiGenerationController.generateWithOpenAI({
           prompt: campaign?.message?.originalPrompt || campaign?.message?.baseMessage,
           variantCount: 1,
           characterLimit: this.getMessageSetting(campaign?.message?.settings, "characterLimit"),

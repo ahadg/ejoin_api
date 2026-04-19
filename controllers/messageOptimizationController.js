@@ -3,8 +3,9 @@ const axios = require('axios');
 
 class MessageOptimizationController {
   constructor() {
-    this.grokApiKey = process.env.GROK_API_KEY;
-    this.grokApiUrl = process.env.GROK_API_URL || 'https://api.x.ai/v1/chat/completions';
+    this.openaiApiKey = process.env.OPENAI_API_KEY;
+    this.openaiApiUrl = process.env.OPENAI_API_URL || 'https://api.openai.com/v1/responses';
+    this.openaiModel = process.env.OPENAI_MODEL || 'gpt-4.1-mini';
   }
 
   // Optimize message to reduce spam score
@@ -34,8 +35,8 @@ class MessageOptimizationController {
         });
       }
 
-      // Generate optimized message using Grok AI
-      const optimizationResult = await this.optimizeWithGrok({
+      // Generate optimized message using OpenAI
+      const optimizationResult = await this.optimizeWithOpenAI({
         message,
         companyName,
         messageCategory,
@@ -59,8 +60,72 @@ class MessageOptimizationController {
     }
   };
 
-  // Private method to optimize message using Grok AI
-  optimizeWithGrok = async (params) => {
+  getOptimizationSchema = () => ({
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      optimizedMessage: { type: 'string' },
+      originalSpamScore: { type: 'number' },
+      optimizedSpamScore: { type: 'number' },
+      improvement: { type: 'number' },
+      changesMade: {
+        type: 'array',
+        items: { type: 'string' }
+      },
+      characterCount: { type: 'integer' },
+      segments: { type: 'integer' },
+      encoding: { type: 'string' },
+      complianceStatus: { type: 'string' },
+      beforeAfterAnalysis: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          originalIssues: {
+            type: 'array',
+            items: { type: 'string' }
+          },
+          optimizedFeatures: {
+            type: 'array',
+            items: { type: 'string' }
+          }
+        },
+        required: ['originalIssues', 'optimizedFeatures']
+      }
+    },
+    required: [
+      'optimizedMessage',
+      'originalSpamScore',
+      'optimizedSpamScore',
+      'improvement',
+      'changesMade',
+      'characterCount',
+      'segments',
+      'encoding',
+      'complianceStatus',
+      'beforeAfterAnalysis'
+    ]
+  });
+
+  extractOpenAIText = (responseData) => {
+    if (typeof responseData?.output_text === 'string' && responseData.output_text.trim()) {
+      return responseData.output_text.trim();
+    }
+
+    const messageOutput = Array.isArray(responseData?.output)
+      ? responseData.output.find(item => item.type === 'message')
+      : null;
+
+    const textParts = Array.isArray(messageOutput?.content)
+      ? messageOutput.content
+          .filter(item => item.type === 'output_text' && typeof item.text === 'string')
+          .map(item => item.text)
+      : [];
+
+    return textParts.join('\n').trim();
+  };
+
+  // Private method to optimize message using OpenAI
+  optimizeWithOpenAI = async (params) => {
     const {
       message,
       companyName,
@@ -79,41 +144,63 @@ class MessageOptimizationController {
     });
 
     const requestData = {
-      model: "grok-3",
-      messages: [
+      model: this.openaiModel,
+      input: [
         {
           role: "system",
-          content: systemPrompt
+          content: [
+            {
+              type: "input_text",
+              text: systemPrompt
+            }
+          ]
         },
         {
           role: "user",
-          content: `Optimize this SMS message to reduce spam score while preserving its core intent:\n\n"${message}"`
+          content: [
+            {
+              type: "input_text",
+              text: `Optimize this SMS message to reduce spam score while preserving its core intent:\n\n"${message}"`
+            }
+          ]
         }
       ],
-      temperature: 0.5,
-      max_tokens: 1000,
-      n: 1
+      text: {
+        format: {
+          type: 'json_schema',
+          name: 'optimized_sms_message',
+          strict: true,
+          schema: this.getOptimizationSchema()
+        }
+      }
     };
 
     try {
-      const response = await axios.post(this.grokApiUrl, requestData, {
+      const response = await axios.post(this.openaiApiUrl, requestData, {
         headers: {
-          'Authorization': `Bearer ${this.grokApiKey}`,
+          'Authorization': `Bearer ${this.openaiApiKey}`,
           'Content-Type': 'application/json'
         }
       });
       
-      console.log("optimization_grok_response", response.data);
+      console.log("optimization_openai_response", response.data);
 
-      const aiResponse = response.data.choices[0].message.content;
+      const aiResponse = this.extractOpenAIText(response.data);
+      if (!aiResponse) {
+        throw new Error('OpenAI returned an empty optimization response');
+      }
       
       // Parse the AI response to extract optimized message
       return this.parseOptimizationResponse(aiResponse, message);
 
     } catch (error) {
-      console.error('Grok API error for optimization:', error.response?.data || error.message);
+      console.error('OpenAI API error for optimization:', error.response?.data || error.message);
       throw new Error('Failed to optimize message: ' + (error.response?.data?.error?.message || error.message));
     }
+  };
+
+  optimizeWithGrok = async (params) => {
+    return this.optimizeWithOpenAI(params);
   };
 
   // Build system prompt for message optimization
@@ -321,7 +408,7 @@ Return ONLY the JSON object, no other text.`;
       
       for (const message of messages) {
         try {
-          const result = await this.optimizeWithGrok({
+          const result = await this.optimizeWithOpenAI({
             message,
             companyName,
             messageCategory

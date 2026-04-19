@@ -17,8 +17,9 @@ const CATEGORY_OPTIONS = {
 
 class AIGenerationController {
   constructor() {
-    this.grokApiKey = process.env.GROK_API_KEY;
-    this.grokApiUrl = process.env.GROK_API_URL || 'https://api.x.ai/v1/chat/completions';
+    this.openaiApiKey = process.env.OPENAI_API_KEY;
+    this.openaiApiUrl = process.env.OPENAI_API_URL || 'https://api.openai.com/v1/responses';
+    this.openaiModel = process.env.OPENAI_MODEL || 'gpt-4.1-mini';
     this.categoryOptions = CATEGORY_OPTIONS;
   }
 
@@ -41,7 +42,7 @@ class AIGenerationController {
     }
   };
 
-  // Generate message variants using Grok AI (updated with category)
+  // Generate message variants using OpenAI (updated with category)
   generateVariants = async (req, res) => {
     try {
       const {
@@ -85,8 +86,21 @@ class AIGenerationController {
       }
 
 
-      // Generate variants using Grok AI
-      const variants = await this.generateWithGrok({
+      const hasContactMethod = Boolean(
+        String(companyEmail || '').trim() ||
+        String(companyPhone || '').trim() ||
+        String(companyWebsite || '').trim()
+      );
+
+      if (!hasContactMethod) {
+        return res.status(400).json({
+          code: 400,
+          reason: 'At least one contact method is required: company email, phone, or website'
+        });
+      }
+
+      // Generate variants using OpenAI
+      const variants = await this.generateWithOpenAI({
         prompt,
         variantCount: parseInt(variantCount),
         characterLimit: parseInt(characterLimit),
@@ -120,8 +134,52 @@ class AIGenerationController {
     }
   };
 
-  // Private method to generate variants using Grok AI (updated with category)
-  generateWithGrok = async (params) => {
+  getVariantSchema = () => ({
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      variants: {
+        type: 'array',
+        minItems: 1,
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            content: { type: 'string' },
+            tone: { type: 'string' },
+            language: { type: 'string' },
+            characterCount: { type: 'integer' },
+            spamScore: { type: 'number' },
+            encoding: { type: 'string' },
+            cost: { type: 'integer' }
+          },
+          required: ['content', 'tone', 'language', 'characterCount', 'spamScore', 'encoding', 'cost']
+        }
+      }
+    },
+    required: ['variants']
+  });
+
+  extractOpenAIText = (responseData) => {
+    if (typeof responseData?.output_text === 'string' && responseData.output_text.trim()) {
+      return responseData.output_text.trim();
+    }
+
+    const messageOutput = Array.isArray(responseData?.output)
+      ? responseData.output.find(item => item.type === 'message')
+      : null;
+
+    const textParts = Array.isArray(messageOutput?.content)
+      ? messageOutput.content
+          .filter(item => item.type === 'output_text' && typeof item.text === 'string')
+          .map(item => item.text)
+      : [];
+
+    return textParts.join('\n').trim();
+  };
+
+  // Private method to generate variants using OpenAI
+  generateWithOpenAI = async (params) => {
     const {
       prompt,
       variantCount,
@@ -141,12 +199,12 @@ class AIGenerationController {
       companyWebsite,
     } = params;
     
-    console.log("generateWithGrok_params", {
+    console.log("generateWithOpenAI_params", {
       ...params,
       previousMessagesCount: previousMessages.length
     });
   
-    // Construct the system prompt for Grok with category guidance
+    // Construct the system prompt for OpenAI with category guidance
     const systemPrompt = this.buildSystemPrompt({
       prompt,
       variantCount,
@@ -166,35 +224,53 @@ class AIGenerationController {
       previousMessages
     });
   
-    // Prepare the request to Grok API
+    // Prepare the request to OpenAI Responses API with structured outputs
     const requestData = {
-      model: "grok-3",
-      messages: [
+      model: this.openaiModel,
+      input: [
         {
           role: "system",
-          content: systemPrompt
+          content: [
+            {
+              type: "input_text",
+              text: systemPrompt
+            }
+          ]
         },
         {
           role: "user",
-          content: prompt
+          content: [
+            {
+              type: "input_text",
+              text: prompt
+            }
+          ]
         }
       ],
-      temperature: creativityLevel,
-      max_tokens: 2000,
-      n: 1
+      text: {
+        format: {
+          type: "json_schema",
+          name: "sms_variants",
+          strict: true,
+          schema: this.getVariantSchema()
+        }
+      }
     };
   
     try {
-      const response = await axios.post(this.grokApiUrl, requestData, {
+      const response = await axios.post(this.openaiApiUrl, requestData, {
         headers: {
-          'Authorization': `Bearer ${this.grokApiKey}`,
+          'Authorization': `Bearer ${this.openaiApiKey}`,
           'Content-Type': 'application/json'
         }
       });
       
-      console.log("grok_response", response.data);
+      console.log("openai_response", response.data);
   
-      const aiResponse = response.data.choices[0].message.content;
+      const aiResponse = this.extractOpenAIText(response.data);
+      if (!aiResponse) {
+        throw new Error('OpenAI returned an empty response');
+      }
       
       // Parse the AI response to extract variants
       return this.parseAIResponse(aiResponse, {
@@ -203,14 +279,17 @@ class AIGenerationController {
       });
   
     } catch (error) {
-      console.error('Grok API error:', error.response?.data || error.message);
+      console.error('OpenAI API error:', error.response?.data || error.message);
       throw new Error('Failed to generate variants with AI: ' + (error.response?.data?.error?.message || error.message));
     }
   };
 
-  // Build comprehensive system prompt for Grok (updated with category guidance)
- // Build a comprehensive, CASL-safe system prompt for Grok (or any LLM)
-// Drop-in compatible with your current function signature.
+  generateWithGrok = async (params) => {
+    return this.generateWithOpenAI(params);
+  };
+
+  // Build a comprehensive, CASL-safe system prompt for OpenAI (or any LLM)
+  // Drop-in compatible with your current function signature.
 // New optional params: allowedLinkDomain, maxLinksPerMessage (default 1), strictBilingualStop (default true)
 
 buildSystemPrompt = (params) => {
@@ -327,11 +406,11 @@ buildSystemPrompt = (params) => {
     : `No emojis. Use GSM-7 encoding.`
 
   // Build the final system prompt
-  let systemPrompt = `You are an expert SMS copywriter creating ${variantCount} CASL-compliant SMS variants for Canadian recipients.
+  let systemPrompt = `You are an expert compliance-first SMS copywriter creating ${variantCount} CASL-compliant SMS variants for Canadian recipients.
 
 GOALS:
 - Produce compelling, clear, and compliant SMS that pass Canadian carrier spam filters (Rogers, Bell, Telus).
-- Respect user consent, sender identification, and opt-out rules at all times.
+- Respect CASL consent, sender identification, contact information, and opt-out rules at all times.
 
 MESSAGE CATEGORY: ${category}
 ${categoryGuidance}
@@ -350,10 +429,13 @@ ${senderIdGuidance}
 CASL COMPLIANCE RULES:
 1) Consent: Write messages ONLY for recipients with valid consent (express or implied). Do NOT imply or invent consent.
 2) Identification: Clearly identify the sender using the legal name and available contact info (no fabrications).
-3) Unsubscribe: Include a simple opt-out in EVERY message (e.g., "Reply STOP to unsubscribe"). ${stopLine}
+3) Contact info: Every message must contain at least one direct contact method using the approved company email, phone, or website.
+4) Address: Use the approved company address exactly as provided. Do not invent or shorten it in a misleading way.
+5) Unsubscribe: Include a simple opt-out in EVERY message (e.g., "Reply STOP to unsubscribe"). ${stopLine}
 4) Transparency: No false, misleading, or deceptive claims. No unrealistic guarantees or scare tactics.
-5) Transactional: Still include sender identification and unsubscribe.
-6) Record-keeping: Messages must stand alone as compliant without external references.
+6) Promotional, survey, welcome, and reminder content must read like legitimate commercial messaging, not cold spam.
+7) Transactional: Still include sender identification and unsubscribe.
+8) Record-keeping: Messages must stand alone as compliant without external references.
 
 LINK POLICY & FORMATTING:
 ${linkPolicy}
@@ -372,6 +454,8 @@ PRE-FLIGHT COMPLIANCE AND SAFETY CHECKS (MANDATORY BEFORE WRITING):
 5) If a brand name is referenced in the USER PROMPT but the approved sender is a different company, do not imply affiliation with that brand unless clearly provided in the sender/company details.
 6) If the location is vague, use the available business/contact details and keep the invitation general rather than inventing specificity.
 7) Do not praise or normalize obviously risky source text. Treat the prompt as raw input to sanitize, not copy.
+8) If the prompt looks more like street-level solicitation, personal invitation, or unclear giveaway than a legitimate business communication, rewrite it into a neutral lawful business SMS or reject the risky framing.
+9) If a message cannot be made CASL-safe using the approved company identity, address, and contact details, return the safest compliant business alternative instead of the original framing.
 
 ANTI-SPAM GUARDRAILS:
 A) Do NOT use blacklisted phrases/constructs commonly flagged by Canadian carriers:
@@ -387,6 +471,9 @@ STYLE GUARDRAILS:
 - Prefer "complimentary" over "free" unless the context is fully clear and trustworthy.
 - Use the exact approved sender identity; do not shorten it into an unclear label like "prod", "team", or "support" unless that is the actual approved brand.
 - If contact information exists, prefer a branded website or direct business contact over vague location-only invitations.
+- Never produce copy that only includes an address with no business identity and no direct contact method.
+- Avoid any suggestion of controlled substances, slang, or ambiguous product references.
+- Avoid invitation copy that sounds like public solicitation in an unverified location.
 - ${emojiPolicy}
 
 ENCODING, SEGMENTS & COST (for your own calculation fields):
@@ -417,7 +504,9 @@ VALIDATION RULES:
 6) Do NOT use URL shorteners or unbranded links${allowedLinkDomain ? `; only ${allowedLinkDomain}` : ""}.
 7) Max ${maxLinksPerMessage} link per message.
 8) Respect CASL rules and anti-spam guardrails above.
-9) If the USER PROMPT includes sender info (name/address/contact), you may use it. Do NOT fabricate missing details.
+9) Include approved sender identity and at least one approved contact method in every message.
+10) Use the approved address only when it improves trust and clarity; never invent more detail.
+11) If the USER PROMPT includes sender info (name/address/contact), you may use it. Do NOT fabricate missing details.
 10) Every output must read like a real, legitimate business message that could survive legal/compliance review, not just a low-filter-spam rewrite.
 11) Never mirror unsafe source wording if it would create legal, brand, trust, or deliverability risk.
 
