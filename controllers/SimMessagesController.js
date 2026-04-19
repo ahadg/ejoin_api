@@ -96,6 +96,15 @@ exports.getSMS = async (req, res) => {
 exports.getConversations = async (req, res) => {
   try {
     const { deviceId } = req.query;
+    const includeTotal = req.query.includeTotal === "true";
+    const requestedLimit = Number.parseInt(req.query.limit, 10);
+    const requestedOffset = Number.parseInt(req.query.offset, 10);
+    const limit = Number.isFinite(requestedLimit) && requestedLimit > 0
+      ? Math.min(requestedLimit, 500)
+      : 100;
+    const offset = Number.isFinite(requestedOffset) && requestedOffset >= 0
+      ? requestedOffset
+      : 0;
     
     if (!deviceId) {
       return res.status(400).json({ code: 400, reason: "deviceId is required" });
@@ -104,8 +113,7 @@ exports.getConversations = async (req, res) => {
     // Get all accessible SIMs for the device
     const sims = await getScopedSimIdsForDevice(req.user, deviceId);
 
-    // Aggregate messages by SIM and contact
-    const conversations = await SimMessages.aggregate([
+    const baseConversationPipeline = [
       {
         $match: {
           sim: { $in: sims.map((s) => s._id) },
@@ -173,11 +181,44 @@ exports.getConversations = async (req, res) => {
         },
       },
       { $sort: { lastTimestamp: -1 } },
+    ];
+
+    const conversationsPromise = SimMessages.aggregate([
+      ...baseConversationPipeline,
+      { $skip: offset },
+      { $limit: limit + 1 },
     ]);
+
+    const countPromise = includeTotal
+      ? SimMessages.aggregate([
+          ...baseConversationPipeline,
+          { $count: "total" },
+        ])
+      : Promise.resolve([]);
+
+    const [countResult, conversations] = await Promise.all([
+      countPromise,
+      conversationsPromise,
+    ]);
+
+    const hasMore = conversations.length > limit;
+    const paginatedConversations = hasMore
+      ? conversations.slice(0, limit)
+      : conversations;
+    const total = includeTotal ? (countResult[0]?.total || 0) : undefined;
 
     res.json({
       code: 200,
-      data: { conversations },
+      data: {
+        conversations: paginatedConversations,
+        pagination: {
+          total,
+          limit,
+          offset,
+          hasMore,
+          nextOffset: offset + paginatedConversations.length,
+        },
+      },
     });
   } catch (err) {
     console.error("Fetch Conversations Error:", err);

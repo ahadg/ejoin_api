@@ -22,6 +22,7 @@ const commandsRoutes = require('./routes/Ejoin/commands');
 const simRoutes = require('./routes/sim');
 const dashboardRoutes = require('./routes/dashboard');
 const notificationRoutes = require('./routes/notifications');
+const billingRoutes = require('./routes/billing');
 const CampaignService = require('./services/campaignService');
 
 // Import Redis configuration
@@ -139,7 +140,12 @@ app.use(cors({
 app.options('*', cors());
 
 // Body parsers
-app.use(bodyParser.json({ limit: '10mb' }));
+app.use(bodyParser.json({
+  limit: '10mb',
+  verify: (req, res, buf) => {
+    req.rawBody = buf;
+  },
+}));
 app.use(bodyParser.urlencoded({ extended: true }));
 
 // Public routes
@@ -226,6 +232,7 @@ app.use('/api/messages', messageRoutes);
 app.use('/api/sentmessages', messageSentRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/notifications', notificationRoutes);
+app.use('/api/billing', billingRoutes);
 
 // 404 handler
 app.use('*', (req, res) => {

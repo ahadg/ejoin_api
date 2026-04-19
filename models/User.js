@@ -45,6 +45,31 @@ const userSchema = new mongoose.Schema({
   },
   resetPasswordExpires: {
     type: Date
+  },
+  billing: {
+    provider: {
+      type: String,
+      default: 'lemonsqueezy'
+    },
+    customerId: String,
+    orderId: String,
+    subscriptionId: String,
+    productId: String,
+    productName: String,
+    variantId: String,
+    variantName: String,
+    status: {
+      type: String,
+      default: 'inactive'
+    },
+    subscribedAt: Date,
+    renewsAt: Date,
+    endsAt: Date,
+    trialEndsAt: Date,
+    customerPortalUrl: String,
+    updatePaymentMethodUrl: String,
+    lastEventName: String,
+    lastWebhookAt: Date
   }
 }, {
   timestamps: true

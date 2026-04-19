@@ -4,8 +4,20 @@ const User = require('../models/User');
 const { auth, JWT_SECRET } = require('../middleware/auth');
 const { sendPasswordEmail } = require('../utils/emailService');
 const crypto = require('crypto');
+const { serializeBilling } = require('../controllers/billingController');
 
 const router = express.Router();
+
+function serializeUser(user) {
+  return {
+    id: user._id,
+    email: user.email,
+    name: user.name,
+    role: user.role,
+    lastLogin: user.lastLogin,
+    billing: serializeBilling(user),
+  };
+}
 
 // Signup
 router.post('/signup', async (req, res) => {
@@ -34,12 +46,7 @@ router.post('/signup', async (req, res) => {
       code: 201,
       message: 'User created successfully',
       data: {
-        user: {
-          id: user._id,
-          email: user.email,
-          name: user.name,
-          role: user.role
-        },
+        user: serializeUser(user),
         token
       }
     });
@@ -88,13 +95,7 @@ router.post('/signin', async (req, res) => {
       code: 200,
       message: 'Login successful',
       data: {
-        user: {
-          id: user._id,
-          email: user.email,
-          name: user.name,
-          role: user.role,
-          lastLogin: user.lastLogin
-        },
+        user: serializeUser(user),
         token
       }
     });
@@ -112,13 +113,7 @@ router.get('/me', auth, async (req, res) => {
   res.json({
     code: 200,
     data: {
-      user: {
-        id: req.user._id,
-        email: req.user.email,
-        name: req.user.name,
-        role: req.user.role,
-        lastLogin: req.user.lastLogin
-      }
+      user: serializeUser(req.user)
     }
   });
 });
