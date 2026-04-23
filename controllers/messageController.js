@@ -1,4 +1,4 @@
-const Message = require('../models/Message');
+const MessageTemplate = require('../models/MessageTemplate');
 const MessageVariant = require('../models/MessageVariant');
 
 // ================== Messages ==================
@@ -11,12 +11,12 @@ exports.getMessages = async (req, res) => {
       query.isTemplate = isTemplate === 'true';
     }
 
-    const messages = await Message.find(query)
+    const messages = await MessageTemplate.find(query)
       .sort({ createdAt: -1 })
       .limit(limit * 1)
       .skip((page - 1) * limit).populate('variants'); 
 
-    const total = await Message.countDocuments(query);
+    const total = await MessageTemplate.countDocuments(query);
 
     res.json({
       code: 200,
@@ -37,7 +37,7 @@ exports.createMessage = async (req, res) => {
   try {
     const { name, category, originalPrompt, baseMessage, settings, isTemplate } = req.body;
 
-    const message = new Message({
+    const message = new MessageTemplate({
       name,
       category,
       originalPrompt,
@@ -62,7 +62,7 @@ exports.createMessage = async (req, res) => {
 
 exports.getMessageById = async (req, res) => {
   try {
-    const message = await Message.findOne({ 
+    const message = await MessageTemplate.findOne({ 
       _id: req.params.id, 
       user: req.user._id 
     }).populate('variants');
@@ -88,7 +88,7 @@ exports.updateMessage = async (req, res) => {
     const { name, category, baseMessage, originalPrompt, settings, variants } = req.body;
 
     // Step 1: Update the main message
-    const message = await Message.findOneAndUpdate(
+    const message = await MessageTemplate.findOneAndUpdate(
       { _id: req.params.id, user: req.user._id },
       { name, category, originalPrompt, baseMessage, settings, updatedAt: new Date() },
       { new: true, runValidators: true }
@@ -127,7 +127,7 @@ exports.updateMessage = async (req, res) => {
 
 exports.deleteMessage = async (req, res) => {
   try {
-    const message = await Message.findOneAndDelete({ 
+    const message = await MessageTemplate.findOneAndDelete({ 
       _id: req.params.id, 
       user: req.user._id 
     });
@@ -148,7 +148,7 @@ exports.deleteMessage = async (req, res) => {
 // ================== Variants ==================
 exports.createVariant = async (req, res) => {
   try {
-    const message = await Message.findOne({ _id: req.params.id, user: req.user._id });
+    const message = await MessageTemplate.findOne({ _id: req.params.id, user: req.user._id });
     if (!message) {
       return res.status(404).json({ code: 404, reason: 'Message not found' });
     }
@@ -175,7 +175,7 @@ exports.createVariant = async (req, res) => {
 
 exports.getVariants = async (req, res) => {
   try {
-    const message = await Message.findOne({ _id: req.params.id, user: req.user._id });
+    const message = await MessageTemplate.findOne({ _id: req.params.id, user: req.user._id });
     if (!message) {
       return res.status(404).json({ code: 404, reason: 'Message not found' });
     }
@@ -188,4 +188,3 @@ exports.getVariants = async (req, res) => {
     res.status(500).json({ code: 500, reason: 'Error fetching variants' });
   }
 };
-

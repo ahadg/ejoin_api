@@ -3,7 +3,7 @@ const mongoose = require('mongoose');
 const messageVariantSchema = new mongoose.Schema({
   message: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Message',
+    ref: 'MessageTemplate',
     required: true
   },
   content: {

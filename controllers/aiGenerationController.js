@@ -1,7 +1,5 @@
 // controllers/aiGenerationController.js
 const axios = require('axios');
-const Message = require('../models/Message');
-const MessageVariant = require('../models/MessageVariant');
 
 // Category options with descriptions for AI guidance
 const CATEGORY_OPTIONS = {

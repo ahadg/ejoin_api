@@ -8,7 +8,7 @@ const campaignSchema = new mongoose.Schema({
   },
   message: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Message'
+    ref: 'MessageTemplate'
   },
   messageContent: {
     type: String,
